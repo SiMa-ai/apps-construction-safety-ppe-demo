@@ -1,4 +1,8 @@
-"""Run with python -m construction_safety.app --help."""
+"""Run one camera: capture, inference, tracking, incidents, and preview publication.
+
+Camera policy and detector profiles are merged at startup. Only zone edits are
+reloaded during a run. Run with python -m construction_safety.app --help.
+"""
 
 import argparse
 import json
@@ -6,6 +10,7 @@ import os
 import signal
 import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,7 +34,7 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Construction danger-zone and PPE incident monitor")
     p.add_argument("--source", required=True, help="Video file or RTSP URL")
     p.add_argument("--source-id", default="camera", help="Camera label included in incident IDs")
-    p.add_argument("--config", type=Path, default=ROOT / "configs/site.json")
+    p.add_argument("--config", type=Path, default=ROOT / "configs/camera.example.json")
     p.add_argument("--backend", choices=["yolo", "neat"], default="yolo")
     p.add_argument(
         "--detector-config",
@@ -88,6 +93,7 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     config = json.loads(args.config.read_text())
+    # A model profile overrides inference settings without replacing camera policy.
     if args.detector_config:
         profile = json.loads(args.detector_config.read_text())
         config["detector"] = profile["detector"]
@@ -121,7 +127,7 @@ def main(argv=None):
     last_checkpoint = 0.0
     zone_version = revision(config.get("zones", []))
     zone_error = None
-    inference_times = []
+    inference_times = deque(maxlen=1000)
     detection_counts = {}
 
     def stop(_signum, _frame):
@@ -132,6 +138,7 @@ def main(argv=None):
         signal.signal(sig, stop)
 
     def checkpoint(final=False):
+        """Publish dashboard state atomically and an unannotated zone-editor frame."""
         if analytics is None:
             return
         summary = {
@@ -244,14 +251,13 @@ def main(argv=None):
         first_timestamp = stamp
         while running and item is not None:
             frame, stamp = item
+            # Source timestamps drive tracking and review windows; UTC is for the log.
             now = max(0.0, stamp - first_timestamp)
             if events.apply_control(now):
                 analytics.begin_review()
             begin = time.monotonic()
             detections = detector.detect(frame)
             inference_times.append(time.monotonic() - begin)
-            if len(inference_times) > 1000:
-                del inference_times[0]
             for d in detections:
                 detection_counts[d.label] = detection_counts.get(d.label, 0) + 1
             tracks = tracker.update(
@@ -313,6 +319,7 @@ def main(argv=None):
                     new_zones = validate_zones(json.loads(args.config.read_text()).get("zones", []))
                     new_version = revision(new_zones)
                     if new_version != zone_version:
+                        # Rearm entry gates for new geometry; retain the incident review.
                         analytics.zones = load_zones({"zones": new_zones}, width, height)
                         analytics.begin_review()
                         config["zones"] = new_zones
@@ -326,10 +333,8 @@ def main(argv=None):
                 checkpoint()
                 last_checkpoint = time.monotonic()
             if (
-                args.frames
-                and frames >= args.frames
-                or args.duration
-                and time.monotonic() - start >= args.duration
+                (args.frames and frames >= args.frames)
+                or (args.duration and time.monotonic() - start >= args.duration)
             ):
                 break
             if args.realtime and not source.live:

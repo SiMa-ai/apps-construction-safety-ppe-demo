@@ -29,6 +29,7 @@ if not CAMERAS or any(not re.fullmatch(r"src[0-9]+", name) for name in CAMERAS):
 
 
 def current_run(camera):
+    """Resolve the camera run pointer, restricting reads to this repository's runs."""
     if camera not in CAMERAS:
         raise ValueError("Unknown camera")
     path = (ROOT / (ROOT / f"runs/{camera}.path").read_text().strip()).resolve()
@@ -62,6 +63,10 @@ _json_lock = threading.Lock()
 
 
 def shared_json(path):
+    """Read shared state with brief retries, falling back to the last valid value.
+
+    Cached summaries retain their producer timestamps so state() reports staleness.
+    """
     # NFS-backed atomic replacements can briefly disappear to the SDK reader.
     for attempt in range(3):
         try:
@@ -82,6 +87,7 @@ def shared_json(path):
 
 
 def state():
+    """Assemble camera health and incident snapshots in display-channel order."""
     cameras = []
     incidents = []
     for name in CAMERAS:
@@ -124,6 +130,7 @@ source_settings = SourceSettings(ROOT, CAMERAS, _zone_lock)
 
 
 def small_preview(camera):
+    """Return JPEG bytes, an ETag, and producer time from relay or shared storage."""
     if video_relay is not None:
         with video_relay.preview_lock:
             latest = video_relay.previews.get(camera)
@@ -167,6 +174,8 @@ def _small_preview(camera):
 
 
 class Handler(BaseHTTPRequestHandler):
+    """Serve static UI assets and camera, zone, incident, and preview endpoints."""
+
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *args):

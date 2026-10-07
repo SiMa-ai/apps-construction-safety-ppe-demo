@@ -10,6 +10,12 @@ import cv2
 
 
 class IncidentLog:
+    """Keep an append-only event history and a current incident snapshot.
+
+    demo_once groups hazards within a finite review window; it does not identify
+    the same person across video replays. continuous records each gated event.
+    """
+
     def __init__(self, directory, session_id, source_id, channel, policy=None):
         self.directory = directory
         self.session_id, self.source_id, self.channel = session_id, source_id, channel
@@ -30,9 +36,11 @@ class IncidentLog:
         self.publish()
 
     def write(self, event, frame_index, timestamp_s, image):
+        """Create/update an incident, or return None after the demo review window."""
         if self.mode == "demo_once" and timestamp_s - self.review_start_s >= self.window_s:
             self.suppressed += 1
             return None
+        # Omit person IDs from demo grouping: replay-created tracks join one hazard.
         key = (
             (event["type"], event.get("zone"), event.get("item"))
             if self.mode == "demo_once"
@@ -94,6 +102,7 @@ class IncidentLog:
         return record
 
     def publish(self):
+        """Replace the dashboard snapshot; JSONL retains all previous revisions."""
         tmp = self.directory / "incidents.tmp"
         tmp.write_text(json.dumps(list(self.records.values()), indent=2) + "\n")
         tmp.replace(self.directory / "incidents.json")
@@ -112,6 +121,7 @@ class IncidentLog:
         }
 
     def apply_control(self, now):
+        """Consume each reset token once and archive the previous review snapshot."""
         path = self.directory / "review-request.json"
         if not path.exists():
             return

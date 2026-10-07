@@ -4,6 +4,10 @@ import cv2
 
 
 def zone_for_box(box, zones, mode="either_bottom_corner", include_boundary=True):
+    """Return the first matching zone; callers must supply zones in priority order.
+
+    Bottom anchors approximate ground contact in the image, not physical depth.
+    """
     if mode not in ("bottom_center", "either_bottom_corner"):
         raise ValueError(f"Unknown zone membership mode: {mode}")
     x1, _, x2, y2 = box
@@ -25,6 +29,11 @@ PPE_LABELS = {
 
 
 def associate_ppe(workers, detections):
+    """Associate PPE by body region and overlap; missing detections stay unknown.
+
+    Explicit positive and negative evidence for the same item produces conflict.
+    Ambiguous ownership between overlapping workers contributes no evidence.
+    """
     result = {w.id: {"hardhat": "unknown", "vest": "unknown"} for w in workers}
     evidence = {}
     for d in detections:
@@ -68,7 +77,11 @@ def associate_ppe(workers, detections):
 
 
 def guard_missing_vests(frame, workers, states, config):
-    """Flag contradictory fluorescent torso evidence, never certify PPE by color alone."""
+    """Change missing-vest states to conflict when torso color contradicts the model.
+
+    Mutates states in place and returns the supporting measurements. Color alone
+    never marks a vest present or certifies that the worker has appropriate PPE.
+    """
     evidence = {}
     if frame is None or not config.get("enabled", False):
         return evidence

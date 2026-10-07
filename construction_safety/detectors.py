@@ -1,3 +1,9 @@
+"""Adapt PyTorch and compiled Neat models to source-pixel Detection records.
+
+Both backends accept OpenCV BGR frames. Tracking and incident policy live in
+analytics; the paired detectors only control when fresh PPE evidence is available.
+"""
+
 from pathlib import Path
 
 import numpy as np
@@ -6,6 +12,8 @@ from .analytics import Detection
 
 
 class YoloDetector:
+    """Run a local checkpoint and map its training labels to demo categories."""
+
     def __init__(self, model_path, config, device="cpu"):
         import torch
         from ultralytics import YOLO
@@ -13,7 +21,7 @@ class YoloDetector:
         torch.set_num_threads(config.get("threads", 4))
         if not Path(model_path).is_file():
             raise FileNotFoundError(
-                f"Model not found: {model_path}; run scripts/prepare_model.py first"
+                f"Model not found: {model_path}; provide the checkpoint configured for this detector"
             )
         self.model = YOLO(str(model_path))
         self.config, self.device = config, device
@@ -24,7 +32,7 @@ class YoloDetector:
         self.labels = actual
 
     def detect(self, frame):
-        r = self.model.predict(
+        prediction = self.model.predict(
             frame,
             device=self.device,
             imgsz=self.config.get("image_size", 640),
@@ -35,9 +43,9 @@ class YoloDetector:
             verbose=False,
         )[0]
         detections = []
-        for row in r.boxes.data.cpu().numpy():
+        for row in prediction.boxes.data.cpu().numpy():
             x1, y1, x2, y2, score, cls = row[:6]
-            label = r.names[int(cls)]
+            label = prediction.names[int(cls)]
             category = self.categories.get(label)
             if (
                 category in ("worker", "machine", "ppe")
@@ -93,6 +101,7 @@ class NeatDetector:
         opt.score_threshold = config.get("score", 0.35)
         opt.nms_iou_threshold = 0.5
         opt.top_k = 100
+        # Decode back into source pixels so tracking and polygons share coordinates.
         opt.boxdecode_original_width = width
         opt.boxdecode_original_height = height
         opt.boxdecode_resize_mode = pyneat.ResizeMode.Letterbox
@@ -147,6 +156,7 @@ class Yolo26PPETrackerDetector:
         self._configure_sampling(auxiliary)
 
     def _configure_sampling(self, auxiliary):
+        """Require negative PPE labels; absent positive detections are not violations."""
         if not {"NO-Hardhat", "NO-Safety Vest"} <= self.auxiliary.labels:
             raise ValueError(
                 "PPE checkpoint lacks the explicit missing-hardhat/vest classes required for incidents"
@@ -160,9 +170,11 @@ class Yolo26PPETrackerDetector:
 
     def detect(self, frame):
         result = self.primary.detect(frame)
+        # An unsampled frame is not an observation that PPE has disappeared.
         self.ppe_updated = self.index % self.interval == 0
         self.index += 1
         if self.ppe_updated:
+            # Only the primary detector supplies people, avoiding duplicate worker tracks.
             result.extend(d for d in self.auxiliary.detect(frame) if d.category != "worker")
         return result
 

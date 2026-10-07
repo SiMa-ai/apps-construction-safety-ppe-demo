@@ -1,3 +1,5 @@
+"""Read BGR video frames and send annotated previews to Insight over RTP."""
+
 import subprocess
 import threading
 import time
@@ -47,6 +49,7 @@ class Source:
             self.cap.release()
 
     def read(self):
+        """Return (frame, seconds): file position for files, monotonic time for RTSP."""
         if not self.live:
             ok, frame = self.cap.read()
             if not ok:
@@ -73,6 +76,8 @@ class Source:
 
 
 class FFmpegSender:
+    """Encode BGR frames using the host FFmpeg process for the local backend."""
+
     def __init__(self, width, height, fps, host, port, logfile):
         self.log = open(logfile, "w")
         self.process = subprocess.Popen(
@@ -145,6 +150,8 @@ class FFmpegSender:
 
 
 class NeatSender:
+    """Encode RGB frames through a Neat graph on the device."""
+
     def __init__(self, width, height, fps, host, port):
         import pyneat as p
 

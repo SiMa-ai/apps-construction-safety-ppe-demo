@@ -13,10 +13,14 @@ import threading
 import time
 from pathlib import Path
 
+# Wire framing: uint16 channel, uint32 payload length, both in network byte order.
+# Channels 0–3 carry RTP; 100 + camera index carries float64 timestamp + JPEG.
 HEADER = struct.Struct("!HI")
+PREVIEW_CHANNEL_BASE = 100
 
 
 def receive(base, channels):
+    """Device side: multiplex local RTP packets and current JPEGs onto SSH stdout."""
     import cv2
     import numpy as np
 
@@ -60,7 +64,9 @@ def receive(base, channels):
                         if not ok:
                             continue
                         packet = struct.pack("!d", stamp / 1e9) + jpeg.tobytes()
-                        sys.stdout.buffer.write(HEADER.pack(100 + index, len(packet)) + packet)
+                        sys.stdout.buffer.write(
+                            HEADER.pack(PREVIEW_CHANNEL_BASE + index, len(packet)) + packet
+                        )
                         sys.stdout.buffer.flush()
                         last_previews[camera] = key
                     except (OSError, ValueError, KeyError):
@@ -71,6 +77,7 @@ def receive(base, channels):
 
 
 def read_exact(stream, size):
+    """Reassemble one framed field; pipe reads may stop before a packet boundary."""
     data = bytearray()
     while len(data) < size:
         chunk = stream.read(size - len(data))
@@ -81,6 +88,8 @@ def read_exact(stream, size):
 
 
 class VideoRelay:
+    """SDK side: forward RTP to Insight and keep only the latest JPEG per camera."""
+
     def __init__(self, root, runtime):
         self.root, self.runtime = root, runtime
         self.cameras = json.loads((root / "configs/dashboard.json").read_text())["cameras"]
@@ -130,7 +139,10 @@ class VideoRelay:
                         break
                     while not self.closed.is_set():
                         channel, size = HEADER.unpack(read_exact(self.process.stdout, HEADER.size))
-                        is_preview = 100 <= channel < 100 + len(self.cameras)
+                        is_preview = (
+                            PREVIEW_CHANNEL_BASE <= channel
+                            < PREVIEW_CHANNEL_BASE + len(self.cameras)
+                        )
                         if (not is_preview and (channel >= 4 or size > 65535)) or size > 2_000_000:
                             raise ValueError("Invalid relay packet")
                         packet = read_exact(self.process.stdout, size)
@@ -139,7 +151,7 @@ class VideoRelay:
                                 raise ValueError("Invalid preview packet")
                             stamp = struct.unpack("!d", packet[:8])[0]
                             with self.preview_lock:
-                                self.previews[self.cameras[channel - 100]] = (
+                                self.previews[self.cameras[channel - PREVIEW_CHANNEL_BASE]] = (
                                     bytes(packet[8:]),
                                     f'"{stamp}"',
                                     stamp,

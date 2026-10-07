@@ -3,6 +3,7 @@
 import json
 import os
 import shlex
+import signal
 import ssl
 import subprocess
 import threading
@@ -37,6 +38,12 @@ def insight(path, payload=None):
 
 
 class SourceSettings:
+    """Serialize camera changes and expose progress to dashboard polling.
+
+    Camera names identify policies; source numbers select Insight inputs; channels
+    select output views. Changing a video requires clearing its scene-specific zones.
+    """
+
     def __init__(self, root, cameras, zone_lock):
         self.root, self.cameras, self.zone_lock = Path(root), cameras, zone_lock
         self.lock = threading.Lock()
@@ -65,6 +72,7 @@ class SourceSettings:
         }
 
     def submit(self, request):
+        """Validate against current routing, then hand the lock to a background job."""
         if not isinstance(request, dict):
             raise ValueError("Expected a camera settings object")
         if not self.lock.acquire(blocking=False):
@@ -164,14 +172,8 @@ class SourceSettings:
             return
         if not self._process_alive(camera):
             return
-        subprocess.run(
-            ["bash", "scripts/stop_insight.sh"],
-            cwd=self.root,
-            env={**os.environ, "INSTANCE": camera},
-            check=True,
-            capture_output=True,
-            timeout=10,
-        )
+        pid = int((self.root / f"runs/{camera}.pid").read_text())
+        os.kill(pid, signal.SIGTERM)
         for _ in range(150):
             if not self._process_alive(camera):
                 return
@@ -179,6 +181,7 @@ class SourceSettings:
         raise ValueError(f"{camera} has not stopped yet. Retry after it exits.")
 
     def _start(self, camera, route):
+        """Start inference and wait for a running summary containing processed frames."""
         if self._device_runtime():
             record = self._device_command("start", camera, route)
             run = Path(record["run_dir"]).resolve()
@@ -189,19 +192,51 @@ class SourceSettings:
             temporary.write_text(str(run.relative_to(self.root.resolve())) + "\n")
             temporary.replace(pointer)
         else:
-            subprocess.run(
-                ["bash", "scripts/start_insight.sh", "--config", f"configs/{camera}.json"],
-                cwd=self.root,
-                env={
-                    **os.environ,
-                    "INSTANCE": camera,
-                    "SOURCE": f"rtsp://127.0.0.1:8554/src{route['source']}",
-                    "CHANNEL": str(route["channel"]),
-                },
-                check=True,
-                capture_output=True,
-                timeout=10,
+            if self._process_alive(camera):
+                raise ValueError(f"{camera} is already running")
+            run = (
+                self.root
+                / "runs"
+                / (camera + "-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f"))
             )
+            run.mkdir(parents=True)
+            command = [
+                str(self.root / ".venv/bin/python"),
+                "-u",
+                "-m",
+                "construction_safety.app",
+                "--config",
+                str(self.root / f"configs/{camera}.json"),
+                "--source",
+                f"rtsp://127.0.0.1:8554/src{route['source']}",
+                "--insight-host",
+                "127.0.0.1",
+                "--channel",
+                str(route["channel"]),
+                "--source-id",
+                camera,
+                "--run-dir",
+                str(run),
+            ]
+            with (run / "monitor.log").open("w") as log:
+                process = subprocess.Popen(
+                    command,
+                    cwd=self.root,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                    env={
+                        **os.environ,
+                        "YOLO_CONFIG_DIR": str(self.root / ".yolo"),
+                        "OPENCV_FFMPEG_CAPTURE_OPTIONS": "rtsp_transport;tcp",
+                    },
+                )
+            (self.root / f"runs/{camera}.pid").write_text(str(process.pid) + "\n")
+            pointer = self.root / f"runs/{camera}.path"
+            temporary = pointer.with_suffix(".tmp")
+            temporary.write_text(str(run.relative_to(self.root)) + "\n")
+            temporary.replace(pointer)
         run = self.root / (self.root / f"runs/{camera}.path").read_text().strip()
         for _ in range(120):
             try:
@@ -218,6 +253,7 @@ class SourceSettings:
         )
 
     def _run(self, request, state, scene_changed):
+        """Apply a serialized change and audit its outcome, including partial failures."""
         camera = request["camera"]
         routes = state["routes"]
         old = dict(routes[camera])
@@ -241,6 +277,7 @@ class SourceSettings:
                     ),
                     None,
                 )
+                # Moving into an occupied view swaps channels, not camera identities.
                 restart_swapped = swapped and self._process_alive(swapped)
                 self._stop(camera)
                 if swapped:

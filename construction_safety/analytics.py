@@ -1,3 +1,9 @@
+"""Session-local tracking, polygon occupancy, and debounced incident candidates.
+
+Times are seconds on the source clock; boxes use source-image pixel coordinates.
+IncidentLog separately groups and persists the candidates emitted here.
+"""
+
 import math
 from collections import Counter
 from dataclasses import dataclass, field
@@ -7,11 +13,14 @@ import numpy as np
 
 from .red_zone import associate_ppe, guard_missing_vests, zone_for_box
 
+# OpenCV uses BGR: safe, caution, PPE warning, and danger.
 COLORS = {0: (60, 210, 60), 1: (0, 230, 255), 2: (0, 140, 255), 3: (0, 0, 255)}
 
 
 @dataclass
 class Detection:
+    """One model observation with an (x1, y1, x2, y2) box in source pixels."""
+
     box: tuple
     score: float
     label: str
@@ -20,6 +29,8 @@ class Detection:
 
 @dataclass
 class Track:
+    """A session-local worker or machine ID, retained across short detection gaps."""
+
     id: str
     box: tuple
     score: float
@@ -51,6 +62,7 @@ class Tracker:
         self.confirmed = {"worker": set(), "machine": set()}
 
     def update(self, detections, now):
+        """Return confirmed tracks observed now; keep unseen tracks only for recovery."""
         self.tracks = [t for t in self.tracks if now - t.last_seen <= self.max_gap_s]
         candidates = []
         for ti, t in enumerate(self.tracks):
@@ -67,6 +79,7 @@ class Tracker:
                 distance = math.hypot(cx, cy) / size
                 if overlap >= 0.15 or distance <= 0.6:
                     candidates.append((1 - overlap + 0.3 * distance, ti, di))
+        # Greedy lowest-cost matches are one-to-one within each object category.
         used_t, used_d = set(), set()
         for _, ti, di in sorted(candidates):
             if ti in used_t or di in used_d:
@@ -97,6 +110,7 @@ class Tracker:
 
 
 def load_zones(config, width, height):
+    """Convert normalized vertices to pixels, with highest-priority zones first."""
     zones = []
     names = set()
     for z in config.get("zones", []):
@@ -193,6 +207,11 @@ class Analytics:
         self.status = {}
 
     def update(self, tracks, now, ppe_detections=(), ppe_updated=True, frame=None):
+        """Update occupancy and emit confirmed danger/PPE observations.
+
+        Unsampled PPE frames may display recent evidence, but cannot advance the
+        PPE incident gate. Evidence expires or is dropped when a worker disappears.
+        """
         workers = [t for t in tracks if t.category == "worker"]
         if ppe_updated:
             self.ppe_status = associate_ppe(workers, ppe_detections) if self.ppe_enabled else {}
@@ -263,6 +282,7 @@ class Analytics:
         return events
 
     def begin_review(self):
+        """Rearm incident gates without resetting IDs, occupancy, or lifetime counts."""
         self.gate.states.clear()
         self.ppe_gate.states.clear()
 

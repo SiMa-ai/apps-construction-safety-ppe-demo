@@ -7,12 +7,14 @@ import uuid
 
 
 def revision(zones):
+    """Return a stable content token for detecting concurrent editor changes."""
     return hashlib.sha256(
         json.dumps(zones, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()[:16]
 
 
 def validate_zones(zones):
+    """Validate simple polygons in normalized [0, 1] image coordinates."""
     if not isinstance(zones, list) or len(zones) > 32:
         raise ValueError("Use at most 32 zones")
     names = set()
@@ -86,6 +88,11 @@ def validate_zones(zones):
 
 
 def save_zones(path, zones, expected_revision):
+    """Back up and atomically replace zones if the editor revision is current.
+
+    Callers serialize writes with the dashboard zone lock; this token detects
+    stale browser edits, not concurrent filesystem writes by other processes.
+    """
     zones = validate_zones(zones)
     config = json.loads(path.read_text())
     if revision(config.get("zones", [])) != expected_revision:
