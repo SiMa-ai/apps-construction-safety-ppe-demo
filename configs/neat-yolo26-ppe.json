@@ -1,0 +1,63 @@
+{
+  "description": "Compiled YOLO26 person detection each frame plus compiled YOLOv8 PPE/machinery every third frame. Preserve camera settings with --detector-config.",
+  "pipeline": "neat-yolo26-ppe",
+  "model": "models/yolo26n-det-bf16-mla_tess-b1.tar.gz",
+  "detector": {
+    "decode_type": "yolo26",
+    "num_classes": 80,
+    "score": 0.35,
+    "timeout_ms": 10000,
+    "score_by_category": {
+      "worker": 0.5
+    },
+    "class_map": {
+      "0": {
+        "label": "person",
+        "category": "worker"
+      }
+    }
+  },
+  "auxiliary_detector": {
+    "num_classes": 10,
+    "score_domain": "logit",
+    "score": 0.35,
+    "timeout_ms": 10000,
+    "score_by_category": {
+      "worker": 0.5,
+      "machine": 0.35,
+      "ppe": 0.5
+    },
+    "class_map": {
+      "0": {
+        "label": "Hardhat",
+        "category": "ppe"
+      },
+      "2": {
+        "label": "NO-Hardhat",
+        "category": "ppe"
+      },
+      "4": {
+        "label": "NO-Safety Vest",
+        "category": "ppe"
+      },
+      "5": {
+        "label": "Person",
+        "category": "worker"
+      },
+      "7": {
+        "label": "Safety Vest",
+        "category": "ppe"
+      },
+      "8": {
+        "label": "machinery",
+        "category": "machine"
+      },
+      "9": {
+        "label": "vehicle",
+        "category": "machine"
+      }
+    },
+    "model": "models/ppe-yolov8s-bf16-modalix.tar.gz",
+    "every_n_frames": 3
+  }
+}

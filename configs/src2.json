@@ -1,0 +1,27 @@
+{
+  "description": "Camera safety policy. Select a video and draw its zones in the dashboard.",
+  "event_hold_s": 0.3,
+  "event_release_s": 1.0,
+  "tracker": {
+    "max_gap_s": 2.0,
+    "min_hits": 2
+  },
+  "zones": [],
+  "zone_membership": {
+    "mode": "either_bottom_corner",
+    "include_boundary": true
+  },
+  "ppe": {
+    "enabled": true,
+    "log_missing": true,
+    "high_visibility_vest_guard": {
+      "enabled": true,
+      "min_coverage": 0.1,
+      "min_patch_coverage": 0.05
+    }
+  },
+  "incident_policy": {
+    "mode": "demo_once",
+    "collection_seconds": 60
+  }
+}
