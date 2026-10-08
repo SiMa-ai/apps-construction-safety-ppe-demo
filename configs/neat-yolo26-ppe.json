@@ -6,6 +6,7 @@
     "decode_type": "yolo26",
     "num_classes": 80,
     "score": 0.35,
+    "tracking_score": 0.25,
     "timeout_ms": 10000,
     "score_by_category": {
       "worker": 0.5
