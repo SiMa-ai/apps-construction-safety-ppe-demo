@@ -5,13 +5,16 @@ import gzip
 import json
 import re
 import signal
+import ssl
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
+from urllib.request import Request, urlopen
 
 import cv2
 import numpy as np
@@ -110,8 +113,10 @@ def state():
             )
     incidents.sort(key=lambda e: e["timestamp_utc"], reverse=True)
     routes = source_settings.mappings()
+    aliases = source_settings.aliases()
     for camera in cameras:
         camera["routing"] = routes[camera["source_id"]]
+        camera["alias"] = aliases.get(camera["source_id"], "")
     cameras.sort(key=lambda c: c["routing"]["channel"])
     return {
         "cameras": cameras,
@@ -173,6 +178,33 @@ def _small_preview(camera):
         return data, etag, stat.st_mtime
 
 
+def webrtc_answer(request):
+    """Proxy SDP to local Insight; media travels directly between Insight and browser."""
+    if not isinstance(request, dict) or request.get("camera") not in CAMERAS:
+        raise ValueError("Unknown camera")
+    offer = request.get("offer")
+    if not isinstance(offer, dict) or offer.get("type") != "offer":
+        raise ValueError("Expected a WebRTC offer")
+    if not isinstance(offer.get("sdp"), str) or not offer["sdp"].startswith("v=0"):
+        raise ValueError("Invalid SDP")
+    channel = source_settings.mappings()[request["camera"]]["channel"]
+    if type(channel) is not int or not 0 <= channel < 4:
+        raise ValueError("Invalid camera channel")
+    # The destination is fixed, not browser supplied. Insight uses a local certificate.
+    upstream = Request(
+        f"https://127.0.0.1:8081/offer?channel={channel}",
+        data=json.dumps({"type": "offer", "sdp": offer["sdp"]}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urlopen(upstream, context=ssl._create_unverified_context(), timeout=10) as response:
+            return response.read(), 200
+    except HTTPError as exc:
+        return json.dumps({"error": exc.read().decode(errors="replace")[:500]}).encode(), exc.code
+    except (URLError, TimeoutError):
+        return json.dumps({"error": "Insight signaling unavailable"}).encode(), 502
+
+
 class Handler(BaseHTTPRequestHandler):
     """Serve static UI assets and camera, zone, incident, and preview endpoints."""
 
@@ -202,6 +234,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if urlsplit(self.path).path not in (
+            "/api/webrtc",
             "/api/review/reset",
             "/api/zones",
             "/api/camera-settings",
@@ -220,6 +253,10 @@ class Handler(BaseHTTPRequestHandler):
             ):
                 raise ValueError("Expected small JSON request")
             request = json.loads(self.rfile.read(size))
+            if urlsplit(self.path).path == "/api/webrtc":
+                answer, status = webrtc_answer(request)
+                self.send(answer, status=status)
+                return
             if urlsplit(self.path).path == "/api/camera-settings":
                 self.send(json.dumps(source_settings.submit(request)).encode(), status=202)
                 return
@@ -279,12 +316,20 @@ class Handler(BaseHTTPRequestHandler):
                     (ROOT / "construction_safety/web/index.html").read_bytes(),
                     "text/html; charset=utf-8",
                 )
-            elif path in ("/dashboard.js", "/dashboard.css", "/settings.js", "/source-settings.js"):
+            elif path in ("/dashboard.js", "/webrtc.js", "/dashboard.css", "/settings.js", "/source-settings.js"):
                 kind = "text/javascript" if path.endswith(".js") else "text/css"
                 self.send(
                     (ROOT / "construction_safety/web" / path[1:]).read_bytes(),
                     kind + "; charset=utf-8",
                 )
+            elif path in (
+                "/fonts/ibm-plex-sans-400.woff2",
+                "/fonts/ibm-plex-sans-500.woff2",
+                "/fonts/ibm-plex-sans-600.woff2",
+            ):
+                self.send((ROOT / "construction_safety/web" / path[1:]).read_bytes(), "font/woff2")
+            elif path == "/neat-mark.png":
+                self.send((ROOT / "construction_safety/web/neat-mark.png").read_bytes(), "image/png")
             elif path == "/api/camera-settings":
                 self.send(json.dumps(source_settings.snapshot()).encode())
             elif path == "/api/zones":
@@ -305,11 +350,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(json.dumps(state()).encode())
             elif path == "/api/incidents.json":
                 self.send(json.dumps(state()["incidents"], indent=2).encode())
-            elif path == "/api/events.jsonl":
+            elif path in ("/api/events.jsonl", "/api/performance.jsonl"):
                 camera = query.get("camera", [CAMERAS[0]])[0]
                 run = current_run(camera)
                 # Capture a complete prefix and stream it without loading a long log into RAM.
-                with (run / "events.jsonl").open("rb") as stream:
+                filename = "performance.jsonl" if path == "/api/performance.jsonl" else "events.jsonl"
+                with (run / filename).open("rb") as stream:
                     stream.seek(0, 2)
                     size = stream.tell()
                     stream.seek(0)
@@ -317,7 +363,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Content-Type", "application/x-ndjson")
                     self.send_header("Content-Length", str(size))
                     self.send_header(
-                        "Content-Disposition", f'attachment; filename="{camera}-incidents.jsonl"'
+                        "Content-Disposition", f'attachment; filename="{camera}-{filename}"'
                     )
                     self.end_headers()
                     while size:

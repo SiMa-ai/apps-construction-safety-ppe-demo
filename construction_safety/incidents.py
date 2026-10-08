@@ -61,6 +61,7 @@ class IncidentLog:
                 "timestamp_s": round(timestamp_s, 3),
                 "worker_box": event.get("worker_box"),
                 "ppe_status": event.get("ppe_status", {}),
+                "visibility": event.get("visibility", {}),
             }
             record["revision"] += 1
             record["record_type"] = "incident_updated"

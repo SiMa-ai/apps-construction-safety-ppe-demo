@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-from .red_zone import associate_ppe, guard_missing_vests, zone_for_box
+from .red_zone import associate_ppe, ground_contact, guard_missing_vests, zone_for_box
+from .visibility import VisibilityPolicy
 
 # OpenCV uses BGR: safe, caution, PPE warning, and danger.
 COLORS = {0: (60, 210, 60), 1: (0, 230, 255), 2: (0, 140, 255), 3: (0, 0, 255)}
@@ -40,6 +41,8 @@ class Track:
     hits: int = 1
     velocity: tuple = (0.0, 0.0)
     votes: Counter = field(default_factory=Counter)
+    height_reference: float = 0.0
+    consecutive_hits: int = 1
 
     @property
     def foot(self):
@@ -52,38 +55,131 @@ def iou(a, b):
     return area / total if total > 0 else 0.0
 
 
-class Tracker:
-    """One-to-one association within worker/machine categories, with short-gap recovery."""
+def minimum_cost_matches(costs, unmatched_cost=2.0):
+    """Rectangular Hungarian assignment with one unmatched option per track.
 
-    def __init__(self, max_gap_s=1.5, min_hits=2):
+    Global assignment avoids a greedy match stealing the only plausible detection
+    of a neighbouring worker. Dummy columns allow either person to remain unseen.
+    """
+    rows, cols = costs.shape
+    if not rows or not cols:
+        return []
+    costs = np.concatenate((costs, np.full((rows, rows), unmatched_cost)), axis=1)
+    columns = costs.shape[1]
+    u, v = np.zeros(rows + 1), np.zeros(columns + 1)
+    owners, previous = np.zeros(columns + 1, dtype=int), np.zeros(columns + 1, dtype=int)
+    for row in range(1, rows + 1):
+        owners[0], column = row, 0
+        distance = np.full(columns + 1, np.inf)
+        used = np.zeros(columns + 1, dtype=bool)
+        while True:
+            used[column] = True
+            current = owners[column]
+            delta, next_column = np.inf, 0
+            for candidate in range(1, columns + 1):
+                if used[candidate]:
+                    continue
+                reduced = costs[current - 1, candidate - 1] - u[current] - v[candidate]
+                if reduced < distance[candidate]:
+                    distance[candidate], previous[candidate] = reduced, column
+                if distance[candidate] < delta:
+                    delta, next_column = distance[candidate], candidate
+            u[owners[used]] += delta
+            v[used] -= delta
+            distance[~used] -= delta
+            column = next_column
+            if not owners[column]:
+                break
+        while column:
+            predecessor = previous[column]
+            owners[column] = owners[predecessor]
+            column = predecessor
+    return [
+        (owners[column] - 1, column - 1)
+        for column in range(1, cols + 1)
+        if owners[column] and costs[owners[column] - 1, column - 1] < unmatched_cost
+    ]
+
+
+class Tracker:
+    """Confirm tracks before assigning IDs; use weaker boxes only for recovery."""
+
+    def __init__(self, max_gap_s=1.5, min_hits=3, new_track_score=0.5):
+        if (
+            not math.isfinite(max_gap_s)
+            or max_gap_s <= 0
+            or int(min_hits) != min_hits
+            or min_hits < 1
+        ):
+            raise ValueError("Tracker requires a positive max_gap_s and integer min_hits")
+        if not math.isfinite(new_track_score) or not 0 <= new_track_score <= 1:
+            raise ValueError("new_track_score must be between 0 and 1")
         self.max_gap_s, self.min_hits = max_gap_s, min_hits
+        self.new_track_score = new_track_score
         self.tracks = []
         self.next_id = Counter()
         self.confirmed = {"worker": set(), "machine": set()}
 
-    def update(self, detections, now):
-        """Return confirmed tracks observed now; keep unseen tracks only for recovery."""
-        self.tracks = [t for t in self.tracks if now - t.last_seen <= self.max_gap_s]
-        candidates = []
-        for ti, t in enumerate(self.tracks):
-            dt = max(0.0, now - t.last_seen)
+    def _matches(self, detections, track_indices, detection_indices, now, recovery=False):
+        costs = np.full((len(track_indices), len(detection_indices)), 1e6)
+        for ti, index in enumerate(track_indices):
+            t = self.tracks[index]
+            # Long extrapolation magnifies box jitter when a worker is occluded.
+            dt = min(0.25, max(0.0, now - t.last_seen))
             vx, vy = t.velocity
             predicted = tuple(v + (vx if i % 2 == 0 else vy) * dt for i, v in enumerate(t.box))
-            for di, d in enumerate(detections):
+            for di, detection_index in enumerate(detection_indices):
+                d = detections[detection_index]
                 if t.category != d.category:
                     continue
-                overlap = iou(predicted, d.box)
-                cx = (d.box[0] + d.box[2] - predicted[0] - predicted[2]) / 2
-                cy = (d.box[1] + d.box[3] - predicted[1] - predicted[3]) / 2
+                # A stationary hypothesis recovers workers who stop or change pose
+                # while hidden; prediction alone can drift away from their location.
+                reference = max((predicted, t.box), key=lambda box: iou(box, d.box))
+                overlap = iou(reference, d.box)
+                cx = (d.box[0] + d.box[2] - reference[0] - reference[2]) / 2
+                cy = (d.box[1] + d.box[3] - reference[1] - reference[3]) / 2
                 size = max(20.0, t.box[3] - t.box[1])
                 distance = math.hypot(cx, cy) / size
-                if overlap >= 0.15 or distance <= 0.6:
-                    candidates.append((1 - overlap + 0.3 * distance, ti, di))
-        # Greedy lowest-cost matches are one-to-one within each object category.
-        used_t, used_d = set(), set()
-        for _, ti, di in sorted(candidates):
-            if ti in used_t or di in used_d:
-                continue
+                plausible = overlap >= 0.15 or distance <= 0.6
+                if recovery:
+                    plausible = overlap >= 0.25 and distance <= 0.45
+                if plausible:
+                    # Prefer a recent track when two trajectories are otherwise equal.
+                    age = min(1, (now - t.last_seen) / self.max_gap_s)
+                    costs[ti, di] = 1 - overlap + 0.3 * distance + 0.1 * age
+        return [
+            (track_indices[ti], detection_indices[di]) for ti, di in minimum_cost_matches(costs)
+        ]
+
+    def update(self, detections, now, machines_updated=True):
+        """Return observed tracks only. A hidden track never inflates current occupancy."""
+        self.tracks = [t for t in self.tracks if now - t.last_seen <= self.max_gap_s]
+        strong = [
+            i
+            for i, d in enumerate(detections)
+            if d.category != "worker" or d.score >= self.new_track_score
+        ]
+        weak = [i for i in range(len(detections)) if i not in strong]
+        # Established tracks take precedence over unconfirmed hypotheses.
+        established = [i for i, t in enumerate(self.tracks) if t.id]
+        matches = self._matches(detections, established, strong, now)
+        used_t, used_d = {ti for ti, _ in matches}, {di for _, di in matches}
+        recovered = self._matches(
+            detections, [i for i in established if i not in used_t], weak, now, recovery=True
+        )
+        matches += recovered
+        used_t.update(ti for ti, _ in recovered)
+        used_d.update(di for _, di in recovered)
+        tentative = self._matches(
+            detections,
+            [i for i, t in enumerate(self.tracks) if not t.id],
+            [i for i in strong if i not in used_d],
+            now,
+        )
+        matches += tentative
+        used_t.update(ti for ti, _ in tentative)
+        used_d.update(di for _, di in tentative)
+        for ti, di in matches:
             t, d = self.tracks[ti], detections[di]
             dt = max(0.001, now - t.last_seen)
             dx = (d.box[0] + d.box[2] - t.box[0] - t.box[2]) / 2 / dt
@@ -91,20 +187,35 @@ class Tracker:
             t.velocity = (0.5 * t.velocity[0] + 0.5 * dx, 0.5 * t.velocity[1] + 0.5 * dy)
             t.box, t.score, t.last_seen = d.box, d.score, now
             t.hits += 1
+            t.consecutive_hits += 1
+            height = d.box[3] - d.box[1]
+            # Slow downward adaptation retains evidence of abrupt truncation without
+            # treating ordinary perspective changes as permanently partial.
+            t.height_reference = max(height, 0.98 * t.height_reference + 0.02 * height)
             t.votes[d.label] += 1
             t.label = t.votes.most_common(1)[0][0]
-            used_t.add(ti)
-            used_d.add(di)
+        self.tracks = [
+            t
+            for i, t in enumerate(self.tracks)
+            if t.id or i in used_t or (t.category == "machine" and not machines_updated)
+        ]
         for di, d in enumerate(detections):
-            if di in used_d:
+            if di in used_d or di not in strong:
                 continue
-            self.next_id[d.category] += 1
-            ident = ("W" if d.category == "worker" else "M") + f"{self.next_id[d.category]:04d}"
-            t = Track(ident, d.box, d.score, d.label, d.category, now)
+            t = Track(
+                "", d.box, d.score, d.label, d.category, now, height_reference=d.box[3] - d.box[1]
+            )
             t.votes[d.label] = 1
             self.tracks.append(t)
-        visible = [t for t in self.tracks if t.last_seen == now and t.hits >= self.min_hits]
+        visible = [
+            t
+            for t in self.tracks
+            if t.last_seen == now and (t.id or t.consecutive_hits >= self.min_hits)
+        ]
         for t in visible:
+            if not t.id:
+                self.next_id[t.category] += 1
+                t.id = ("W" if t.category == "worker" else "M") + f"{self.next_id[t.category]:04d}"
             self.confirmed[t.category].add(t.id)
         return visible
 
@@ -152,23 +263,40 @@ def zone_for(point, zones):
 class Gate:
     """Emit once on confirmed entry or escalation; clear after sustained absence."""
 
-    def __init__(self, hold_s=0.3, release_s=0.6):
+    def __init__(self, hold_s=0.3, release_s=0.6, min_observations=1):
+        if not all(math.isfinite(v) and v >= 0 for v in (hold_s, release_s)):
+            raise ValueError("Gate durations must be finite and nonnegative")
+        if int(min_observations) != min_observations or min_observations < 1:
+            raise ValueError("min_observations must be a positive integer")
         self.hold_s, self.release_s = hold_s, release_s
+        self.min_observations = min_observations
         self.states = {}
 
-    def update(self, observations, now):
+    def update(self, observations, now, fresh=True):
         events = []
+        # An observed absence interrupts dwell, even if release hysteresis retains
+        # the previous peak to avoid duplicate alerts on brief boundary flicker.
+        for key, state in self.states.items():
+            if key not in observations or observations[key][0] <= 0:
+                state["candidate"] = 0
+                state["samples"] = 0
         for key, (level, payload) in observations.items():
-            if level <= 0:
+            if level <= 0 or not fresh:
                 continue
             s = self.states.get(key)
             if s is None:
-                s = {"candidate": level, "since": now, "peak": 0, "last": now}
+                s = {"candidate": level, "since": now, "peak": 0, "last": now, "samples": 0}
                 self.states[key] = s
             if level != s["candidate"]:
                 s["candidate"], s["since"] = level, now
+                s["samples"] = 0
             s["last"] = now
-            if level > s["peak"] and now - s["since"] >= self.hold_s:
+            s["samples"] += 1
+            if (
+                level > s["peak"]
+                and now - s["since"] >= self.hold_s
+                and s["samples"] >= self.min_observations
+            ):
                 s["peak"] = level
                 events.append({**payload, "level": level})
         for key in list(self.states):
@@ -183,14 +311,19 @@ class Analytics:
     def __init__(self, config, width, height):
         self.zones = load_zones(config, width, height)
         self.width, self.height = width, height
+        self.visibility = VisibilityPolicy(config.get("visibility", {}), width, height)
         self.membership = config.get(
             "zone_membership", {"mode": "bottom_center", "include_boundary": True}
         )
         if self.membership.get("mode", "bottom_center") not in (
             "bottom_center",
+            "ground_contact",
             "either_bottom_corner",
         ):
             raise ValueError("Invalid zone_membership mode")
+        self.ground_margin = float(self.membership.get("ground_margin_fraction", 0.02))
+        if not math.isfinite(self.ground_margin) or not 0 <= self.ground_margin <= 0.25:
+            raise ValueError("ground_margin_fraction must be between 0 and 0.25")
         self.ppe_enabled = config.get("ppe", {}).get("enabled", False)
         self.ppe_log_missing = config.get("ppe", {}).get("log_missing", False)
         self.ppe_status = {}
@@ -202,7 +335,12 @@ class Analytics:
         self.occupancy = {"workers_total": 0, "red_zone_in": 0, "red_zone_out": 0}
         self.red_peak = 0
         self.gate = Gate(config.get("event_hold_s", 0.3), config.get("event_release_s", 1.0))
-        self.ppe_gate = Gate(config.get("event_hold_s", 0.3), config.get("event_release_s", 1.0))
+        ppe_config = config.get("ppe", {})
+        self.ppe_gate = Gate(
+            ppe_config.get("hold_s", 1.0),
+            config.get("event_release_s", 1.0),
+            ppe_config.get("min_observations", 3),
+        )
         self.counts = Counter()
         self.status = {}
 
@@ -213,35 +351,60 @@ class Analytics:
         PPE incident gate. Evidence expires or is dropped when a worker disappears.
         """
         workers = [t for t in tracks if t.category == "worker"]
+        visibility = self.visibility.assess(workers)
+        eligible_ids = {pid for pid, state in visibility.items() if state["incident_eligible"]}
         if ppe_updated:
+            # Include partial people during ownership checks so their helmet/vest
+            # cannot be reassigned to a neighbouring, incident-eligible worker.
             self.ppe_status = associate_ppe(workers, ppe_detections) if self.ppe_enabled else {}
             self.ppe_visual_evidence = guard_missing_vests(
                 frame, workers, self.ppe_status, self.vest_guard
             )
             self.ppe_last_observed = now
         else:
-            visible = {w.id for w in workers}
-            self.ppe_status = {
-                pid: state for pid, state in self.ppe_status.items() if pid in visible
-            }
-            self.ppe_visual_evidence = {
-                pid: value for pid, value in self.ppe_visual_evidence.items() if pid in visible
-            }
             if self.ppe_last_observed is None or now - self.ppe_last_observed > self.ppe_max_age_s:
                 self.ppe_status = {}
                 self.ppe_visual_evidence = {}
+        # Drop evidence immediately on loss of visibility, including unsampled
+        # frames. Becoming visible again requires fresh PPE model observations.
+        self.ppe_status = {
+            pid: state for pid, state in self.ppe_status.items() if pid in eligible_ids
+        }
+        self.ppe_visual_evidence = {
+            pid: value for pid, value in self.ppe_visual_evidence.items() if pid in eligible_ids
+        }
         self.red_worker_ids, self.status = [], {}
         danger, ppe = {}, {}
         for w in workers:
-            z = zone_for_box(w.box, self.zones, **self.membership)
+            contact = None
+            visible = visibility[w.id]
+            if not visible["incident_eligible"]:
+                z = None
+                contact = {
+                    "state": "uncertain",
+                    "zone": None,
+                    "point_px": None,
+                    "reason": "limited_person_visibility",
+                    "depth_measured": False,
+                }
+            elif self.membership.get("mode") == "ground_contact":
+                z, contact = ground_contact(
+                    w.box, self.zones, self.width, self.height, self.ground_margin
+                )
+            else:
+                z = zone_for_box(w.box, self.zones, **self.membership)
             zone_name = z["name"] if z else "OPEN"
+            if contact and contact["state"] == "uncertain":
+                zone_name = contact["zone"] or "UNKNOWN"
             in_danger = bool(z and (z.get("restricted") or z["level"] == 3))
             missing = [
                 item for item, state in self.ppe_status.get(w.id, {}).items() if state == "missing"
             ]
             self.status[w.id] = {
                 "zone": zone_name,
+                "visibility": visible,
                 "danger": in_danger,
+                "ground_contact": contact,
                 "missing_ppe": missing,
                 "ppe": self.ppe_status.get(w.id, {"hardhat": "unknown", "vest": "unknown"}),
                 "ppe_visual_evidence": self.ppe_visual_evidence.get(w.id, {}),
@@ -250,6 +413,8 @@ class Analytics:
                 "worker_id": w.id,
                 "person_id": w.id,
                 "worker_box": list(w.box),
+                "visibility": visible,
+                "ground_contact": contact,
                 "zone": zone_name,
                 "ppe_status": self.ppe_status.get(w.id, {}),
                 "ppe_visual_evidence": self.ppe_visual_evidence.get(w.id, {}),
@@ -257,7 +422,7 @@ class Analytics:
             if in_danger:
                 self.red_worker_ids.append(w.id)
                 danger[(w.id, zone_name)] = (3, {**payload, "type": "danger_zone_entry"})
-            if ppe_updated and self.ppe_log_missing:
+            if self.ppe_log_missing:
                 for item in missing:
                     ppe[(w.id, item)] = (
                         2,
@@ -270,13 +435,32 @@ class Analytics:
                     )
         self.occupancy = {
             "workers_total": len(workers),
+            "workers_assessable": len(eligible_ids),
+            "workers_partial": sum(v["state"] == "partial" for v in visibility.values()),
+            "workers_uncertain": sum(v["state"] == "uncertain" for v in visibility.values()),
             "red_zone_in": len(self.red_worker_ids),
-            "red_zone_out": len(workers) - len(self.red_worker_ids),
+            "red_zone_out": len(eligible_ids) - len(self.red_worker_ids),
         }
+        if self.membership.get("mode") == "ground_contact":
+            uncertain = sum(
+                state["visibility"]["incident_eligible"]
+                and (state.get("ground_contact") or {}).get("state") == "uncertain"
+                for state in self.status.values()
+            )
+            self.occupancy["zone_uncertain"] = uncertain
+            self.occupancy["red_zone_out"] -= uncertain
         self.red_peak = max(self.red_peak, len(self.red_worker_ids))
         events = self.gate.update(danger, now)
-        if ppe_updated:
-            events += self.ppe_gate.update(ppe, now)
+        events += self.ppe_gate.update(ppe, now, fresh=ppe_updated)
+        for pid, state in self.status.items():
+            state["confirmed_missing_ppe"] = [
+                item
+                for item in state["missing_ppe"]
+                if self.ppe_gate.states.get((pid, item), {}).get("peak", 0) >= 2
+                and self.ppe_gate.states[(pid, item)]["candidate"] > 0
+                and self.ppe_gate.states[(pid, item)]["samples"] >= self.ppe_gate.min_observations
+                and now - self.ppe_gate.states[(pid, item)]["since"] >= self.ppe_gate.hold_s
+            ]
         for event in events:
             self.counts[event["type"]] += 1
         return events
@@ -292,9 +476,10 @@ class Analytics:
             "red_zone_peak": self.red_peak,
             "ppe_status": self.ppe_status,
             "zone_membership": self.membership,
+            "visibility_scope": "Box-based estimate; clear visibility does not verify a full body or PPE compliance",
             "event_counts": dict(self.counts),
             "people": [{"person_id": pid, **state} for pid, state in self.status.items()],
-            "ppe_missing_now": sum(bool(s["missing_ppe"]) for s in self.status.values()),
+            "ppe_missing_now": sum(bool(s["confirmed_missing_ppe"]) for s in self.status.values()),
         }
 
     def render(self, frame, tracks, fps):
@@ -311,8 +496,18 @@ class Analytics:
             if t.category != "worker":
                 continue
             state = self.status.get(t.id, {})
-            danger, missing = state.get("danger", False), state.get("missing_ppe", [])
-            color = COLORS[3] if danger else (COLORS[2] if missing else (210, 210, 210))
+            danger, missing = state.get("danger", False), state.get("confirmed_missing_ppe", [])
+            contact = state.get("ground_contact") or {}
+            uncertain = contact.get("state") == "uncertain"
+            visibility = state.get("visibility", {}).get("state", "clear")
+            limited = visibility != "clear"
+            color = (
+                (180, 180, 180)
+                if limited
+                else COLORS[3]
+                if danger
+                else (COLORS[2] if missing or uncertain else (210, 210, 210))
+            )
             x1, y1, x2, y2 = map(int, t.box)
             if danger:
                 tint = out.copy()
@@ -322,6 +517,12 @@ class Analytics:
             label = t.id + (" DANGER" if danger else (" PPE" if missing else ""))
             if danger and missing:
                 label += " | PPE"
+            if limited:
+                label += " PARTIAL" if visibility == "partial" else " UNASSESSED"
+            elif uncertain:
+                label += " ZONE?"
+            if contact.get("point_px"):
+                cv2.circle(out, tuple(map(round, contact["point_px"])), 4, color, -1)
             y = max(22, y1 - 6)
             cv2.putText(
                 out, label, (max(0, x1), y), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (15, 15, 15), 4
@@ -329,6 +530,12 @@ class Analytics:
             cv2.putText(out, label, (max(0, x1), y), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
         count = len(self.red_worker_ids)
         text = f"DANGER ZONE: {count}" if count else "DANGER ZONE: CLEAR"
+        if not count and self.occupancy.get("zone_uncertain"):
+            text = "ZONE POSITION UNCERTAIN"
+        if not count and (
+            self.occupancy.get("workers_partial") or self.occupancy.get("workers_uncertain")
+        ):
+            text = "LIMITED VISIBILITY"
         cv2.rectangle(out, (8, 8), (310, 44), (20, 20, 20), -1)
         cv2.putText(
             out,

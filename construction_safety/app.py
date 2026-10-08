@@ -11,6 +11,7 @@ import signal
 import time
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from .detectors import (
 )
 from .incidents import IncidentLog
 from .media import FFmpegSender, NeatSender, Source
+from .performance import Performance
 from .zone_settings import revision, validate_zones
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,6 +92,33 @@ def parse_args(argv=None):
     return a
 
 
+def publish_dashboard_files(run_dir, preview_dir, summary_text, record_text, frame, rendered):
+    """Write a captured snapshot without blocking inference on the shared filesystem."""
+    begin = time.monotonic()
+    if rendered is not None:
+        tmp = preview_dir / "preview.tmp.jpg"
+        if not cv2.imwrite(str(tmp), rendered, [cv2.IMWRITE_JPEG_QUALITY, 80]):
+            raise RuntimeError("Cannot publish dashboard preview")
+        tmp.replace(preview_dir / "preview.jpg")
+        if preview_dir != run_dir:
+            backup = run_dir / "preview.tmp.jpg"
+            backup.write_bytes((preview_dir / "preview.jpg").read_bytes())
+            backup.replace(run_dir / "preview.jpg")
+    if frame is not None:
+        width = min(960, frame.shape[1])
+        editor = cv2.resize(frame, (width, round(frame.shape[0] * width / frame.shape[1])))
+        tmp = run_dir / "editor.tmp.jpg"
+        if not cv2.imwrite(str(tmp), editor, [cv2.IMWRITE_JPEG_QUALITY, 85]):
+            raise RuntimeError("Cannot publish zone editor frame")
+        tmp.replace(run_dir / "editor.jpg")
+    with (run_dir / "performance.jsonl").open("a") as stream:
+        stream.write(record_text)
+    tmp = run_dir / "summary.tmp"
+    tmp.write_text(summary_text)
+    tmp.replace(run_dir / "summary.json")
+    return time.monotonic() - begin
+
+
 def main(argv=None):
     args = parse_args(argv)
     config = json.loads(args.config.read_text())
@@ -125,8 +154,13 @@ def main(argv=None):
     first_timestamp = None
     now = 0.0
     last_checkpoint = 0.0
+    last_control = 0.0
+    pending_timings = {}
+    publication_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dashboard-files")
+    publication = None
     zone_version = revision(config.get("zones", []))
     zone_error = None
+    performance = Performance()
     inference_times = deque(maxlen=1000)
     detection_counts = {}
 
@@ -139,9 +173,16 @@ def main(argv=None):
 
     def checkpoint(final=False):
         """Publish dashboard state atomically and an unannotated zone-editor frame."""
+        nonlocal publication
         if analytics is None:
             return
+        if publication is not None:
+            if not final and not publication.done():
+                return  # Never queue stale dashboard snapshots behind a slow NFS write.
+            pending_timings["publication"] = publication.result()
+        metrics = performance.snapshot()
         summary = {
+            "performance": metrics,
             **analytics.summary(),
             "session_id": run_id,
             "frames": frames,
@@ -152,7 +193,7 @@ def main(argv=None):
             "detector_labels": sorted(detector.labels) if detector else [],
             "detections_by_label": detection_counts,
             "unique_tracks": {k: len(v) for k, v in tracker.confirmed.items()} if tracker else {},
-            "tracking_scope": "this video session; IDs may change after long occlusion",
+            "tracking_scope": "unique_tracks counts confirmed track segments in this session, not unique individuals; IDs can change after long occlusion or replay",
             "source_id": args.source_id,
             "channel": args.channel,
             "input_source": args.source,
@@ -169,20 +210,30 @@ def main(argv=None):
                 1000 * sum(inference_times) / max(1, len(inference_times)), 2
             ),
         }
-        tmp = args.run_dir / "summary.tmp"
-        tmp.write_text(json.dumps(summary, indent=2) + "\n")
-        tmp.replace(args.run_dir / "summary.json")
-        if frame is not None:
-            editor = cv2.resize(
-                frame,
-                (
-                    min(960, frame.shape[1]),
-                    round(frame.shape[0] * min(960, frame.shape[1]) / frame.shape[1]),
-                ),
-            )
-            tmp_image = args.run_dir / "editor.tmp.jpg"
-            if cv2.imwrite(str(tmp_image), editor, [cv2.IMWRITE_JPEG_QUALITY, 85]):
-                tmp_image.replace(args.run_dir / "editor.jpg")
+        record = {
+            "timestamp_utc": summary["updated_at"],
+            "session_id": run_id,
+            "source_id": args.source_id,
+            "backend": args.backend,
+            "model": str(args.model),
+            "auxiliary_model": summary["auxiliary_model"],
+            "ppe_every_n_frames": summary["ppe_every_n_frames"],
+            "source_size": [analytics.width, analytics.height],
+            "input_source": args.source,
+            "source_fps_reported": source.fps if source else None,
+            "configured_output_fps": args.output_fps,
+            "status": summary["status"],
+            **metrics,
+        }
+        # Serialize mutable analytics state before handing it to the writer. Frames
+        # are replaced each iteration, never modified after rendering/submission.
+        publication = publication_pool.submit(
+            publish_dashboard_files, args.run_dir, preview_dir,
+            json.dumps(summary, indent=2) + "\n", json.dumps(record) + "\n",
+            frame, rendered,
+        )
+        if final:
+            publication.result()
 
     try:
         source = Source(args.source)
@@ -253,15 +304,22 @@ def main(argv=None):
             frame, stamp = item
             # Source timestamps drive tracking and review windows; UTC is for the log.
             now = max(0.0, stamp - first_timestamp)
-            if events.apply_control(now):
-                analytics.begin_review()
+            if time.monotonic() - last_control >= 1:
+                control_begin = time.monotonic()
+                if events.apply_control(now):
+                    analytics.begin_review()
+                last_control = time.monotonic()
+                pending_timings["control_poll"] = last_control - control_begin
             begin = time.monotonic()
             detections = detector.detect(frame)
-            inference_times.append(time.monotonic() - begin)
+            inference_elapsed = time.monotonic() - begin
+            inference_times.append(inference_elapsed)
+            analytics_begin = time.monotonic()
             for d in detections:
                 detection_counts[d.label] = detection_counts.get(d.label, 0) + 1
             tracks = tracker.update(
-                [d for d in detections if d.category in ("worker", "machine")], now
+                [d for d in detections if d.category in ("worker", "machine")], now,
+                machines_updated=getattr(detector, "ppe_updated", True),
             )
             incidents = analytics.update(
                 tracks,
@@ -271,13 +329,12 @@ def main(argv=None):
                 frame=frame,
             )
             fps = 1 / max(1e-6, time.monotonic() - begin)
+            analytics_elapsed = time.monotonic() - analytics_begin
+            render_begin = time.monotonic()
             annotated = analytics.render(frame, tracks, fps)
             rendered = cv2.resize(annotated, (out_w, out_h))
-            # Atomic latest-frame publication; preview delivery never queues old frames.
-            tmp_image = preview_dir / "preview.tmp.jpg"
-            if not cv2.imwrite(str(tmp_image), rendered, [cv2.IMWRITE_JPEG_QUALITY, 80]):
-                raise RuntimeError("Cannot publish dashboard preview")
-            tmp_image.replace(preview_dir / "preview.jpg")
+            render_elapsed = time.monotonic() - render_begin
+            logging_begin = time.monotonic()
             for event in incidents:
                 record = events.write(
                     {
@@ -293,6 +350,8 @@ def main(argv=None):
                 )
                 if record is not None:
                     print(json.dumps(record), flush=True)
+            logging_elapsed = time.monotonic() - logging_begin
+            output_begin = time.monotonic()
             if sender:
                 sender.push(rendered, frames)
             if args.record:
@@ -309,12 +368,21 @@ def main(argv=None):
                     if not writer.isOpened():
                         raise RuntimeError("Cannot create output video")
                 writer.write(rendered)
+            completed_at = time.monotonic()
+            performance.record({
+                **pending_timings,
+                "detector_total": inference_elapsed,
+                **getattr(detector, "last_timings", {}),
+                "analytics": analytics_elapsed,
+                "render_preview": render_elapsed,
+                "incident_logging": logging_elapsed,
+                "output_submit": completed_at - output_begin,
+                "frame_work": completed_at - begin,
+            }, completed_at)
+            pending_timings = {}
             frames += 1
             if time.monotonic() - last_checkpoint >= 1:
-                if preview_dir != args.run_dir:
-                    backup = args.run_dir / "preview.tmp.jpg"
-                    backup.write_bytes((preview_dir / "preview.jpg").read_bytes())
-                    backup.replace(args.run_dir / "preview.jpg")
+                checkpoint_begin = time.monotonic()
                 try:
                     new_zones = validate_zones(json.loads(args.config.read_text()).get("zones", []))
                     new_version = revision(new_zones)
@@ -332,6 +400,7 @@ def main(argv=None):
                     zone_error = str(exc)
                 checkpoint()
                 last_checkpoint = time.monotonic()
+                pending_timings["checkpoint"] = last_checkpoint - checkpoint_begin
             if (
                 (args.frames and frames >= args.frames)
                 or (args.duration and time.monotonic() - start >= args.duration)
@@ -341,7 +410,9 @@ def main(argv=None):
                 wait = (source.index / source.fps - first_timestamp) - (time.monotonic() - start)
                 if wait > 0:
                     time.sleep(min(wait, 1.0))
+            read_begin = time.monotonic()
             item = source.read()
+            pending_timings["source_wait"] = time.monotonic() - read_begin
     except BaseException as exc:
         failure = f"{type(exc).__name__}: {exc}"
         raise
@@ -353,7 +424,10 @@ def main(argv=None):
                     obj.release() if obj is writer else obj.close()
                 except Exception as exc:
                     print(f"Cleanup: {exc}", flush=True)
-        checkpoint(final=True)
+        try:
+            checkpoint(final=True)
+        finally:
+            publication_pool.shutdown(wait=True)
         print(
             json.dumps(
                 {"session": run_id, "frames": frames, "status": "failed" if failure else "finished"}

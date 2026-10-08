@@ -20,6 +20,41 @@ def zone_for_box(box, zones, mode="either_bottom_corner", include_boundary=True)
     return None
 
 
+def ground_contact(box, zones, width, height, margin_fraction=0.02):
+    """Estimate ground membership from the box's bottom center, with uncertainty.
+
+    This is image geometry, not measured depth or detected foot keypoints. The
+    boundary tolerance scales with person height as a perspective heuristic.
+    """
+    import math
+
+    if not math.isfinite(margin_fraction) or not 0 <= margin_fraction <= 0.25:
+        raise ValueError("ground_margin_fraction must be between 0 and 0.25")
+    x1, y1, x2, y2 = map(float, box)
+    anchor = ((x1 + x2) / 2, y2)
+    evidence = {
+        "method": "box_bottom_center",
+        "point_px": list(anchor),
+        "state": "outside",
+        "zone": None,
+        "depth_measured": False,
+    }
+    if y2 >= height - 2:
+        return None, {**evidence, "state": "uncertain", "reason": "feet_outside_frame"}
+    margin = max(1.0, (y2 - y1) * margin_fraction)
+    evidence["boundary_margin_px"] = round(margin, 2)
+    for zone in zones:
+        distance = cv2.pointPolygonTest(zone["polygon"], anchor, True)
+        if distance < -margin:
+            continue
+        evidence.update(zone=zone["name"], boundary_distance_px=round(distance, 2))
+        if distance <= margin:
+            # Do not fall through to an overlapping safe zone at a danger boundary.
+            return None, {**evidence, "state": "uncertain", "reason": "near_zone_boundary"}
+        return zone, {**evidence, "state": "inside"}
+    return None, evidence
+
+
 PPE_LABELS = {
     "Hardhat": ("hardhat", "present"),
     "NO-Hardhat": ("hardhat", "missing"),

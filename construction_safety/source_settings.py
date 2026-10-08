@@ -57,6 +57,34 @@ class SourceSettings:
             for n, name in enumerate(self.cameras)
         }
 
+    def aliases(self):
+        config = json.loads((self.root / "configs/dashboard.json").read_text())
+        return config.get("aliases", {})
+
+    def save_alias(self, request):
+        """Change a display label without changing source IDs or restarting analysis."""
+        camera, alias = request.get("camera"), request.get("alias")
+        if camera not in self.cameras:
+            raise ValueError("Unknown camera")
+        if not isinstance(alias, str) or len(alias.strip()) > 64 or any(ord(c) < 32 for c in alias):
+            raise ValueError("Use a stream name of up to 64 characters without control characters")
+        if not self.lock.acquire(blocking=False):
+            raise ValueError("Wait for the camera change to finish before renaming")
+        try:
+            path = self.root / "configs/dashboard.json"
+            config = json.loads(path.read_text())
+            aliases = config.setdefault("aliases", {})
+            if alias.strip():
+                aliases[camera] = alias.strip()
+            else:
+                aliases.pop(camera, None)
+            temporary = path.with_suffix(".alias.tmp")
+            temporary.write_text(json.dumps(config, indent=2) + "\n")
+            temporary.replace(path)
+            return {"saved": True, "camera": camera, "alias": alias.strip()}
+        finally:
+            self.lock.release()
+
     def snapshot(self):
         insight("health")
         sources = insight("mediasrc")
@@ -75,6 +103,8 @@ class SourceSettings:
         """Validate against current routing, then hand the lock to a background job."""
         if not isinstance(request, dict):
             raise ValueError("Expected a camera settings object")
+        if request.get("action") == "alias":
+            return self.save_alias(request)
         if not self.lock.acquire(blocking=False):
             raise ValueError("Another camera change is in progress. Wait for it to finish.")
         try:

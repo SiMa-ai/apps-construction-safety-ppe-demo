@@ -4,11 +4,27 @@ Both backends accept OpenCV BGR frames. Tracking and incident policy live in
 analytics; the paired detectors only control when fresh PPE evidence is available.
 """
 
+import time
 from pathlib import Path
 
 import numpy as np
 
 from .analytics import Detection
+
+
+def tracking_config(config):
+    """Keep weak person boxes for association; they cannot start new worker IDs.
+
+    The tracker and visibility policy retain their own higher confidence thresholds
+    for creating IDs and assessing incidents, respectively.
+    """
+    result = dict(config)
+    threshold = float(config.get("tracking_score", 0.25))
+    if not 0 <= threshold <= 1:
+        raise ValueError("tracking_score must be between 0 and 1")
+    result["score"] = min(config.get("score", 0.35), threshold)
+    result["score_by_category"] = {**config.get("score_by_category", {}), "worker": threshold}
+    return result
 
 
 class YoloDetector:
@@ -150,7 +166,7 @@ class Yolo26PPETrackerDetector:
     """YOLO26 people each frame; construction/PPE evidence on sampled frames only."""
 
     def __init__(self, model_path, config, device, root):
-        self.primary = YoloDetector(model_path, config["detector"], device)
+        self.primary = YoloDetector(model_path, tracking_config(config["detector"]), device)
         auxiliary = config["auxiliary_detector"]
         self.auxiliary = YoloDetector(root / auxiliary["model"], auxiliary, device)
         self._configure_sampling(auxiliary)
@@ -169,13 +185,17 @@ class Yolo26PPETrackerDetector:
         self.labels = self.primary.labels | self.auxiliary.labels
 
     def detect(self, frame):
+        begin = time.monotonic()
         result = self.primary.detect(frame)
+        self.last_timings = {"people_detector": time.monotonic() - begin}
         # An unsampled frame is not an observation that PPE has disappeared.
         self.ppe_updated = self.index % self.interval == 0
         self.index += 1
         if self.ppe_updated:
             # Only the primary detector supplies people, avoiding duplicate worker tracks.
+            begin = time.monotonic()
             result.extend(d for d in self.auxiliary.detect(frame) if d.category != "worker")
+            self.last_timings["ppe_detector"] = time.monotonic() - begin
         return result
 
 
@@ -189,6 +209,6 @@ class NeatYolo26PPETrackerDetector(Yolo26PPETrackerDetector):
             raise ValueError("every_n_frames must be positive")
         if not (root / auxiliary["model"]).is_file():
             raise FileNotFoundError(root / auxiliary["model"])
-        self.primary = NeatDetector(model_path, config["detector"], width, height)
+        self.primary = NeatDetector(model_path, tracking_config(config["detector"]), width, height)
         self.auxiliary = NeatDetector(root / auxiliary["model"], auxiliary, width, height)
         self._configure_sampling(auxiliary)
