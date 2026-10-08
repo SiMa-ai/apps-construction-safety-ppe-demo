@@ -3,73 +3,61 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Site Watch · Incident dashboard</title>
+    <title>SiMa Site Watch · Safety monitoring</title>
     <link rel="stylesheet" href="dashboard.css" />
   </head>
   <body>
+    <a class="skip-link" href="#mainContent">Skip to content</a>
     <header class="app-header">
-      <h1>Site Watch</h1>
-      <nav aria-label="Dashboard navigation">
-        <details id="viewMenu" class="view-menu">
-          <summary>
-            <span id="currentView">Overview</span><span class="chevron" aria-hidden="true">⌄</span>
-          </summary>
-          <div class="view-options">
-            <button id="monitorTab" aria-current="page" aria-controls="monitorPanel">
-              Overview</button
-            ><button id="settingsTab" aria-controls="settingsPanel">Camera settings</button>
-          </div>
-        </details>
+      <div class="app-brand">
+        <!-- Original header mark from Neat GenAI Studio. -->
+        <img class="brand-mark" src="neat-mark.png" width="200" height="134" alt="Neat" />
+        <h1>SiMa Site Watch</h1>
+      </div>
+      <nav aria-label="Dashboard navigation" class="main-nav">
+        <button id="monitorTab" aria-current="page" aria-controls="monitorPanel">Monitor</button>
       </nav>
       <div id="connection" role="status">Connecting…</div>
     </header>
-    <main>
+    <main id="mainContent" tabindex="-1">
       <div id="monitorPanel" aria-label="Overview">
-        <section class="review-banner">
-          <div>
-            <strong>Incident review</strong>
-            <p>Repeated findings are grouped. Replay logging pauses after collection.</p>
-            <span id="reviewMessage" role="status"> </span>
-          </div>
-          <button id="newReview">Start new review</button>
-        </section>
-        <section class="grid" id="cameras"></section>
-        <div class="legend">
-          <span> <i class="dot red"> </i>Red: person in danger zone</span>
-          <span> <i class="dot amber"> </i>Amber: missing PPE evidence</span>
-          <span> <i class="dot"> </i>Neutral: no current alert · does not certify PPE</span>
+        <div class="monitor-heading">
+          <h2 id="overviewHeading" tabindex="-1">Site monitoring</h2>
+          <span id="cameraCount" class="muted">Loading cameras…</span>
         </div>
-        <section class="log">
-          <div class="toolbar">
-            <h2>Review findings <span id="findingCount"> </span></h2>
-            <select id="cameraFilter" aria-label="Camera">
-              <option value="">All cameras</option>
-            </select>
-            <select id="typeFilter" aria-label="Incident type">
-              <option value="">All incidents</option>
-              <option value="danger_zone_entry">Danger zone</option>
-              <option value="ppe_missing">Missing PPE</option>
-            </select>
-            <input id="pidFilter" placeholder="Find person ID…" aria-label="Person ID" />
-            <button id="export">Export visible JSON</button>
+        <div id="cameraViews" class="camera-views" role="group" aria-label="Camera views"></div>
+        <div class="monitor-workspace">
+        <section class="grid" id="cameras" aria-label="Live cameras"></section>
+        <section class="log" aria-labelledby="reviewHeading">
+          <div class="review-banner">
+            <div>
+              <h2 id="reviewHeading" tabindex="-1">Alerts <span id="findingCount"></span></h2>
+              <span id="reviewMessage" role="status"></span>
+            </div>
+            <details class="review-actions"><summary>Actions</summary><div><button id="export">Export JSON</button><button id="newReview" class="quiet">Start new review</button></div></details>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time (UTC)</th>
-                  <th>Camera</th>
-                  <th>People / observations</th>
-                  <th>Incident</th>
-                  <th>Location / item</th>
-                  <th>Evidence</th>
-                </tr>
-              </thead>
-              <tbody id="events"></tbody>
-            </table>
+          <details class="review-filters"><summary id="filterSummary">Filter alerts</summary><div class="toolbar">
+            <label class="filter-field">Camera
+              <select id="cameraFilter">
+                <option value="">All cameras</option>
+              </select>
+            </label>
+            <label class="filter-field">Incident type
+              <select id="typeFilter">
+                <option value="">All incidents</option>
+                <option value="danger_zone_entry">Danger zone</option>
+                <option value="ppe_missing">Missing PPE</option>
+              </select>
+            </label>
+            <label class="filter-field">Track ID
+              <input id="pidFilter" placeholder="e.g. W0001" />
+            </label>
+            <button id="clearFilters" class="quiet">Clear filters</button>
+          </div></details>
+          <div class="alert-feed">
+            <ol id="events" aria-label="Recorded safety alerts"></ol>
             <div class="empty" id="empty">Waiting for incident data…</div>
           </div>
-        </section>
         <details class="review-notes">
           <summary>About this review</summary>
           <p class="footnote">
@@ -81,51 +69,80 @@
             <span id="modelNote"> </span>
           </p>
         </details>
+        </section>
+        </div>
       </div>
-      <section id="settingsPanel" aria-label="Camera settings" hidden>
+    </main>
+      <dialog id="settingsPanel" class="camera-settings-dialog" aria-labelledby="settingsHeading">
         <div class="section-heading">
-          <h2>Safety zones</h2>
-          <span id="editState" class="save-state">All changes saved</span>
+          <div>
+            <h2 id="settingsHeading" tabindex="-1">Camera settings</h2>
+          </div>
+          <button id="closeSettings" class="close-settings quiet" aria-label="Close camera settings"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
         </div>
-        <div class="editor-topbar">
-          <label for="zoneCamera">Camera</label
-          ><select id="zoneCamera"></select
-          ><span class="frame-tag">Frozen editing frame</span
-          ><button id="refreshFrame" class="quiet">Refresh frame</button>
+        <div class="settings-shell">
+          <nav class="settings-nav" aria-label="Camera settings sections">
+            <button id="videoSettingsTab" aria-pressed="true" aria-controls="cameraRoutingPanel">Video</button>
+            <button id="zoneSettingsTab" aria-pressed="false" aria-controls="cameraZonesPanel">Safety zones</button>
+          </nav>
+          <div class="settings-body">
+        <div class="settings-context">
+          <label class="camera-field" for="zoneCamera">
+            Camera view
+            <select id="zoneCamera" name="camera"></select>
+          </label>
         </div>
-        <details class="source-settings" id="sourceDisclosure">
+        <div id="cameraRoutingPanel">
+        <div class="stream-alias">
+          <label for="streamAlias">Stream name</label>
+          <div><input id="streamAlias" maxlength="64" placeholder="e.g. North excavation" autocomplete="off" /><button id="saveAlias">Save name</button></div>
+          <span id="aliasStatus" role="status"></span>
+        </div>
+        <details class="source-settings" id="sourceDisclosure" open>
           <summary>
-            <span>Video &amp; display</span
-            ><span id="sourceSummary" class="muted">Configure source and channel</span
-            ><span class="chevron" aria-hidden="true">⌄</span>
+            <span class="disclosure-title">
+              <strong>Video routing</strong>
+              <span id="sourceSummary" class="muted">Loading current route…</span>
+            </span>
+            <span class="disclosure-action">Configure</span>
+            <span class="chevron" aria-hidden="true">⌄</span>
           </summary>
           <div class="source-content">
             <div class="panel-heading">
-              <h3>Source configuration</h3>
+              <h3>Route this camera</h3>
               <button id="refreshSources" class="quiet">Refresh library</button>
             </div>
             <p class="muted">
-              Select a library video, choose its streaming source, and choose where its results
-              appear. Applying restarts this camera’s analysis and begins a new review; earlier logs
-              stay in the run archive.
+              Applying a route restarts analysis for this camera and starts a new review. Existing
+              incident records remain available in the run archive.
             </p>
             <div class="source-fields">
-              <label>Video from Insight library<select id="sourceVideo" disabled></select></label>
-              <label>Streaming source<select id="sourceSlot" disabled></select></label>
-              <label>Display position<select id="sourceChannel" disabled></select></label>
+              <label>Insight video<select id="sourceVideo" name="source_video" disabled></select></label>
+              <label>Input source<select id="sourceSlot" name="source_slot" disabled></select></label>
+              <label>Display channel<select id="sourceChannel" name="source_channel" disabled></select></label>
             </div>
             <label class="check-label" id="resetZonesRow" hidden
-              ><input type="checkbox" id="resetSourceZones" /> Clear old zones for this different
-              video (the old layout is backed up).</label
+              ><input type="checkbox" id="resetSourceZones" name="reset_source_zones" /> Clear
+              zones from the previous video. The existing layout will be backed up.</label
             >
             <p id="sourceRouteHint" class="field-help"></p>
             <div class="source-actions">
-              <button id="applySource" class="primary" disabled>Apply &amp; start camera</button
+              <button id="applySource" class="primary" disabled>Apply route and start</button
               ><button id="stopSource" class="quiet" disabled>Stop camera</button>
             </div>
           </div>
         </details>
-        <p id="sourceStatus" role="status" class="source-feedback"></p>
+        <p id="sourceStatus" role="status" aria-live="polite" class="source-feedback"></p>
+        </div>
+        <div id="cameraZonesPanel" hidden>
+        <div class="zone-heading">
+          <div>
+            <h3>Safety zones</h3>
+            <p>Select a zone or add corners on the still frame.</p>
+          </div>
+          <span id="zoneCountLabel" class="muted">0 zones</span>
+          <button id="refreshFrame" class="quiet">Refresh frame</button>
+        </div>
         <div class="zone-layout">
           <div class="canvas-panel">
             <div class="canvas-caption">
@@ -137,39 +154,50 @@
               width="960"
               height="540"
               tabindex="0"
-              aria-label="Zone editor: click to add corners; drag corners to adjust"
+              aria-label="Safety zone editor. Select the canvas to place or drag corners. Corner coordinates provide a keyboard alternative."
             ></canvas>
             <div class="canvas-help">
               <span id="canvasHint">Select a zone, then drag its numbered corners.</span
               ><span><kbd>Esc</kbd> Cancel · <kbd>Enter</kbd> Finish</span>
             </div>
-            <p id="zoneStatus" role="status">Select a camera to begin.</p>
+            <p id="zoneStatus" role="status" aria-live="polite">Select a camera to begin.</p>
           </div>
           <aside class="zone-tools">
             <div class="panel-heading">
-              <h3>Your zones <span id="zoneCount">0</span></h3>
-              <button id="addZone" class="small-button">+ Add zone</button>
+              <h3>Zones <span id="zoneCount">0</span></h3>
+              <button id="addZone" class="small-button">Add zone</button>
             </div>
             <select id="zoneList" aria-label="Existing zones" hidden></select>
             <div id="zoneCards" class="zone-cards" role="group" aria-label="Select a zone"></div>
-            <div class="properties">
-              <h3>Zone properties</h3>
+            <fieldset class="properties">
+              <legend>Selected zone</legend>
               <label
                 >Name
-                <input id="zoneName" maxlength="64" placeholder="e.g. Excavation area" /></label
+                <input id="zoneName" name="zone_name" maxlength="64" placeholder="e.g. Excavation area" autocomplete="off" /></label
               ><label
                 >Zone type
-                <select id="zoneLevel">
+                <select id="zoneLevel" name="zone_level">
                   <option value="3">Danger · red</option>
                   <option value="2">Warning · orange</option>
                   <option value="1">Caution · yellow</option>
                   <option value="0">Permitted · green</option>
-                </select></label
+              </select></label
               ><label class="check-label"
-                ><input type="checkbox" id="zoneRestricted" checked /> Treat as restricted</label
+                ><input type="checkbox" id="zoneRestricted" name="zone_restricted" checked /> Treat as restricted</label
               >
               <p class="field-help">Danger and restricted zones trigger entry incidents.</p>
-            </div>
+            </fieldset>
+            <details class="corner-editor">
+              <summary>Corner coordinates</summary>
+              <p class="field-help">Position corners without dragging. X is measured from the left; Y from the top.</p>
+              <label>Corner<select id="cornerSelect" name="corner"></select></label>
+              <div class="coordinate-fields">
+                <label>X (%)<input id="cornerX" name="corner_x" inputmode="decimal" type="number" min="0" max="100" step="0.1" value="50" /></label>
+                <label>Y (%)<input id="cornerY" name="corner_y" inputmode="decimal" type="number" min="0" max="100" step="0.1" value="50" /></label>
+              </div>
+              <button id="applyCorner">Update corner</button>
+              <button id="addCorner">Add corner</button>
+            </details>
             <div class="zone-actions">
               <button id="finishZone" class="primary">Finish polygon</button
               ><button id="undoPoint">Undo corner</button
@@ -180,26 +208,36 @@
         </div>
         <div class="editor-footer">
           <div>
+            <span id="editState" class="save-state">All changes saved</span>
             <strong id="saveHint">Your saved zones are active</strong>
-            <p>Previous findings stay intact. Start a new review to assess an updated layout.</p>
+            <p>Saving updates the active camera. Existing findings remain unchanged.</p>
           </div>
           <div class="footer-actions">
             <button id="reloadZones" class="quiet">Discard changes</button
             ><button id="saveZones" class="primary">Save &amp; apply zones</button>
           </div>
         </div>
-      </section>
-    </main>
-    <dialog id="detail">
-      <button id="closeDetail">Close</button>
-      <h2 id="detailTitle"></h2>
+        </div>
+          </div>
+        </div>
+      </dialog>
+    <dialog id="detail" aria-labelledby="detailTitle">
+      <div class="incident-heading">
+        <div>
+          <h2 id="detailTitle"></h2>
+          <p id="detailCamera" class="muted"></p>
+        </div>
+        <button id="closeDetail" aria-label="Close incident details">Close</button>
+      </div>
       <img id="evidence" alt="Annotated frame at incident confirmation" />
+      <p id="evidenceStatus" role="status" hidden></p>
       <div id="incidentSummary"></div>
       <details class="details">
         <summary>JSON evidence</summary>
         <pre id="record"></pre>
       </details>
     </dialog>
+    <script src="webrtc.js" defer></script>
     <script src="dashboard.js" defer></script>
     <script src="settings.js" defer></script>
     <script src="source-settings.js" defer></script>

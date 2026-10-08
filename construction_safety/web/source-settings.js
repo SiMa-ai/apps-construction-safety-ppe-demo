@@ -53,7 +53,7 @@
       ([n, r]) => n !== camera && r.channel === Number(get('sourceChannel').value),
     );
     get('sourceRouteHint').textContent =
-      `src${get('sourceSlot').value} → Channel ${get('sourceChannel').value}. ` +
+      `Video: ${get('sourceVideo').value || 'none selected'}. src${get('sourceSlot').value} → Channel ${get('sourceChannel').value}. ` +
       (occupied
         ? `This swaps display positions with ${occupied[0]}; its analysis will also restart if running.`
         : 'Channels appear in numeric order on the Overview.');
@@ -61,6 +61,8 @@
   async function load(name) {
     const token = ++generation;
     camera = name;
+    get('streamAlias').value = window.cameraAlias(name);
+    get('aliasStatus').textContent = '';
     state = null;
     loading = true;
     update();
@@ -72,7 +74,7 @@
       working = state.job.status === 'running';
       for (const option of get('zoneCamera').options) {
         const r = state.routes[option.value];
-        if (r) option.textContent = `Channel ${r.channel} · src${r.source}`;
+        if (r) option.textContent = `${window.cameraName(option.value)} · ${option.value} · Channel ${r.channel}`;
       }
       const route = state.routes[camera];
       if (!route) throw Error('Camera is no longer available');
@@ -93,17 +95,17 @@
       );
       get('sourceSlot').value = route.source;
       get('sourceChannel').replaceChildren(
-        ...state.channels.map((c) => new Option(`Channel ${c} · view ${c + 1}`, c)),
+        ...state.channels.map((c) => new Option(`Channel ${c}`, c)),
       );
       get('sourceChannel').value = route.channel;
       get('resetSourceZones').checked = false;
       get('sourceSummary').textContent =
-        `src${route.source} → Channel ${route.channel} · ${current.state}`;
+        `${current.file || 'No video'} · Source ${route.source} → Channel ${route.channel} · ${current.state}`;
       status('');
     } catch (error) {
       if (token === generation) {
         state = null;
-        status(error.message);
+        status(`${error.message}. Check the Insight connection, then select Refresh library to try again.`);
       }
     } finally {
       if (token === generation) {
@@ -138,7 +140,7 @@
     } catch (error) {
       working = false;
       update();
-      status(error.message);
+      status(`${error.message}. Check the Insight connection, then select Refresh library to try again.`);
     } finally {
       requesting = false;
     }
@@ -169,4 +171,19 @@
   get('refreshSources').onclick = () => load(camera);
   get('applySource').onclick = () => apply('apply');
   get('stopSource').onclick = () => apply('stop');
+  get('saveAlias').onclick = async () => {
+    const target = camera;
+    get('saveAlias').disabled = true;
+    get('aliasStatus').textContent = 'Saving…';
+    try {
+      const result = await api({action: 'alias', camera: target, alias: get('streamAlias').value});
+      window.dispatchEvent(new CustomEvent('camera-alias-saved', {detail: result}));
+      if (camera === target) {
+        get('streamAlias').value = result.alias;
+        get('aliasStatus').textContent = 'Name saved';
+      }
+    } catch (error) {
+      if (camera === target) get('aliasStatus').textContent = error.message;
+    } finally { get('saveAlias').disabled = false; }
+  };
 })();

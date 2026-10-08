@@ -51,7 +51,7 @@
       : 'Add your first zone';
     get('canvasHint').textContent = draft
       ? 'Click to place corners. At least 3 corners are required.'
-      : 'Select a zone, then drag its numbered corners.';
+      : 'Drag a numbered corner or use Corner coordinates.';
     get('saveZones').disabled = !!draft || busy || !camera || !dirty;
     get('reloadZones').disabled = busy || (!dirty && !draft);
   }
@@ -117,6 +117,7 @@
     get('deleteZone').hidden = !!draft || selected < 0;
     for (const button of get('zoneCards').querySelectorAll('button'))
       button.disabled = busy || !!draft;
+    cornerFields();
     feedback();
   }
 
@@ -124,6 +125,7 @@
     get('zoneList').replaceChildren(...zones.map((z, i) => new Option(z.name, i)));
     get('zoneList').value = String(selected);
     get('zoneCount').textContent = zones.length;
+    get('zoneCountLabel').textContent = `${zones.length} ${zones.length === 1 ? 'zone' : 'zones'}`;
     get('zoneCards').replaceChildren();
     zones.forEach((zone, index) => {
       const button = document.createElement('button');
@@ -134,7 +136,7 @@
       dot.style.background = colors[zone.level];
       const label = document.createElement('span');
       label.className = 'zone-label';
-      label.textContent = zone.name;
+      label.textContent = zone.name + ' · ' + ['Permitted', 'Caution', 'Warning', 'Danger'][zone.level];
       button.title = zone.name + ' · ' + zone.points.length + ' corners';
       button.append(dot, label);
       button.onclick = () => {
@@ -200,7 +202,7 @@
       await refreshImage();
       status('Select a zone to drag its corners, or choose Add zone.');
     } catch (error) {
-      status(error.message);
+      status(`${error.message}. Check the connection and try again; unsaved edits remain in this editor.`);
     } finally {
       busy = false;
       list();
@@ -217,9 +219,11 @@
       !confirm('Discard unsaved zone edits and switch camera?')
     )
       return;
-    get('monitorPanel').hidden = true;
-    get('settingsPanel').hidden = false;
-    setView('settingsTab', 'Camera settings');
+    if (!get('settingsPanel').open) {
+      showSection('video');
+      get('settingsPanel').showModal();
+      document.body.classList.add('settings-open');
+    }
     if (!camera || (name && name !== camera)) {
       busy = true;
       fields();
@@ -228,13 +232,19 @@
         if (!response.ok) throw Error('Could not load cameras');
         const data = await response.json();
         get('zoneCamera').replaceChildren(
-          ...data.cameras.map((c) => new Option(c.source_id, c.source_id)),
+          ...data.cameras.map(
+            (c) =>
+              new Option(
+                `${c.source_id} · Channel ${c.routing?.channel ?? c.channel ?? '—'}`,
+                c.source_id,
+              ),
+          ),
         );
         if (name) get('zoneCamera').value = name;
         if (!get('zoneCamera').value) throw Error('Camera is no longer available');
         await load(get('zoneCamera').value);
       } catch (error) {
-        status(error.message);
+        status(`${error.message}. Check the connection and try again; unsaved edits remain in this editor.`);
       } finally {
         busy = false;
         fields();
@@ -247,13 +257,39 @@
   window.addEventListener('camera-routing-applied', (event) => {
     if (event.detail.camera === camera) load(camera);
   });
-  get('settingsTab').onclick = () => openSettings();
   window.addEventListener('open-camera-settings', (event) => openSettings(event.detail.camera));
   get('monitorTab').onclick = () => {
-    get('monitorPanel').hidden = false;
-    get('settingsPanel').hidden = true;
-    setView('monitorTab', 'Overview');
+    get('overviewHeading').focus();
   };
+  function showSection(section) {
+    const isVideo = section === 'video';
+    get('cameraRoutingPanel').hidden = !isVideo;
+    get('cameraZonesPanel').hidden = isVideo;
+    get('videoSettingsTab').setAttribute('aria-pressed', String(isVideo));
+    get('zoneSettingsTab').setAttribute('aria-pressed', String(!isVideo));
+    get('settingsPanel').classList.toggle('editing-zones', !isVideo);
+  }
+  get('videoSettingsTab').onclick = () => showSection('video');
+  get('zoneSettingsTab').onclick = () => showSection('zones');
+  function closeSettings() {
+    if (busy) return;
+    if ((dirty || draft) && !confirm('Discard unsaved zone edits and close settings?')) return;
+    if (dirty || draft) {
+      zones = JSON.parse(savedZones);
+      dirty = false;
+      draft = null;
+      selected = zones.length ? 0 : -1;
+      list();
+    }
+    get('settingsPanel').close();
+    document.body.classList.remove('settings-open');
+  }
+  get('closeSettings').onclick = closeSettings;
+  get('settingsPanel').addEventListener('cancel', event => {
+    event.preventDefault();
+    if (draft) { get('cancelPolygon').click(); return; }
+    closeSettings();
+  });
   get('zoneCamera').onchange = () => {
     if ((dirty || draft) && !confirm('Discard unsaved zone edits and switch camera?')) {
       get('zoneCamera').value = camera;
@@ -283,7 +319,7 @@
     draft = { name: `Zone ${number}`, level: 3, restricted: true, points: [] };
     list();
     canvas.focus();
-    status('Click corners around the area, then Finish polygon.');
+    status('Place corners on the image or use Corner coordinates, then Finish polygon.');
   };
   get('finishZone').onclick = () => {
     if (!draft || draft.points.length < 3) return;
@@ -299,7 +335,8 @@
     status(dirty ? 'Unsaved changes' : 'New polygon cancelled');
   };
   get('deleteZone').onclick = () => {
-    if (selected >= 0) {
+    const zone = zones[selected];
+    if (zone && confirm(`Delete “${zone.name}”? The zone will remain active until you save.`)) {
       zones.splice(selected, 1);
       selected = zones.length ? 0 : -1;
       changed();
@@ -334,6 +371,45 @@
       changed();
     }
   };
+
+  function cornerFields() {
+    const zone = current(), select = get('cornerSelect');
+    const previous = Number(select.value) || 0;
+    select.replaceChildren(...(zone?.points || []).map((_, i) => new Option(`Corner ${i + 1}`, i)));
+    select.value = String(Math.min(previous, Math.max(0, (zone?.points.length || 1) - 1)));
+    select.disabled = busy || !zone?.points.length;
+    get('applyCorner').disabled = select.disabled;
+    get('addCorner').disabled = busy || !zone || zone.points.length >= 32;
+    get('cornerX').disabled = get('cornerY').disabled = busy || !zone;
+    cornerValues();
+  }
+  function cornerValues() {
+    const p = current()?.points[Number(get('cornerSelect').value)];
+    if (p) {
+      get('cornerX').value = (p[0] * 100).toFixed(1);
+      get('cornerY').value = (p[1] * 100).toFixed(1);
+    }
+  }
+  get('cornerSelect').onchange = cornerValues;
+  function setCorner(add) {
+    const zone = current();
+    if (busy || !zone) return;
+    for (const id of ['cornerX', 'cornerY']) {
+      const input = get(id);
+      input.required = true;
+      if (!input.reportValidity()) return;
+    }
+    const point = [Number(get('cornerX').value) / 100, Number(get('cornerY').value) / 100];
+    if (add) {
+      if (zone.points.length >= 32) return;
+      zone.points.push(point);
+    } else zone.points[Number(get('cornerSelect').value)] = point;
+    changed();
+    fields();
+    status('Corner updated. Save and apply zones when finished.');
+  }
+  get('applyCorner').onclick = () => setCorner(false);
+  get('addCorner').onclick = () => setCorner(true);
 
   function point(event) {
     const rect = canvas.getBoundingClientRect();
@@ -371,6 +447,7 @@
   };
   canvas.onpointerup = canvas.onpointercancel = () => {
     drag = -1;
+    cornerFields();
   };
   get('saveZones').onclick = async () => {
     if (draft) return;
@@ -409,7 +486,7 @@
           : 'Saved to configuration. The layout will apply when this camera is running.',
       );
     } catch (error) {
-      status(error.message);
+      status(`${error.message}. Check the connection and try again; unsaved edits remain in this editor.`);
     } finally {
       busy = false;
       fields();
@@ -427,24 +504,6 @@
     if ((event.key === 'Backspace' || event.key === 'Delete') && draft) {
       event.preventDefault();
       get('undoPoint').click();
-    }
-  });
-  function setView(active, label) {
-    for (const id of ['monitorTab', 'settingsTab']) {
-      if (id === active) get(id).setAttribute('aria-current', 'page');
-      else get(id).removeAttribute('aria-current');
-    }
-    get('currentView').textContent = label;
-    get('viewMenu').open = false;
-    if (active === 'monitorTab') get('viewMenu').querySelector('summary').focus();
-  }
-  document.addEventListener('pointerdown', (event) => {
-    if (!get('viewMenu').contains(event.target)) get('viewMenu').open = false;
-  });
-  get('viewMenu').addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      get('viewMenu').open = false;
-      get('viewMenu').querySelector('summary').focus();
     }
   });
   window.addEventListener('beforeunload', (event) => {
