@@ -23,7 +23,7 @@ world = ["clip @ git+https://github.com/ultralytics/CLIP.git@a13192f8cb767260d7d
 include = ["construction_safety*"]
 
 [tool.setuptools.package-data]
-construction_safety = ["web/*.html", "web/*.css", "web/*.js"]
+construction_safety = ["web/*.html", "web/*.css", "web/*.js", "web/*.png"]
 
 [tool.ruff]
 required-version = "==0.11.13"
