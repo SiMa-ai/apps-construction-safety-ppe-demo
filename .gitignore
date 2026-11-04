@@ -1,0 +1,24 @@
+# Local environments and caches
+.venv/
+.yolo/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+node_modules/
+.DS_Store
+
+# Runtime output and local zone backups
+runs/
+configs/zone-history/
+*.tmp
+
+# Downloaded media and local model artifacts
+media/
+weights/
+models/
+
+# Python editable-install and build metadata
+*.egg-info/
+build/
+dist/

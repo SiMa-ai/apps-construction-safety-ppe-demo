@@ -1,0 +1,144 @@
+{
+  "description": "Drill-floor view: red ground polygon covers drill/tool working floor and left equipment sweep; orange approach and yellow outer deck extend to the right. No safe zone inferred on this operating deck. Incident display shows danger zones only; other zone geometry retained for location metadata.",
+  "detector": {
+    "image_size": 640,
+    "score": 0.35,
+    "threads": 2,
+    "label_categories": {
+      "person": "worker"
+    },
+    "score_by_category": {
+      "worker": 0.5
+    }
+  },
+  "event_hold_s": 0.3,
+  "event_release_s": 1.0,
+  "tracker": {
+    "max_gap_s": 4.0,
+    "min_hits": 3,
+    "new_track_score": 0.5
+  },
+  "zones": [
+    {
+      "name": "LEFT DRILL APPROACH",
+      "level": 2,
+      "restricted": false,
+      "points": [
+        [
+          0,
+          0.4186675035172223
+        ],
+        [
+          0.5016082133284052,
+          0.4325888738344459
+        ],
+        [
+          0.5014170391609775,
+          0.6279480314765159
+        ],
+        [
+          0,
+          0.8202992321280949
+        ]
+      ]
+    },
+    {
+      "name": "RIGHT DRILL APPROACH",
+      "level": 2,
+      "restricted": false,
+      "points": [
+        [
+          0.5052183006176075,
+          0.43713401733172264
+        ],
+        [
+          0.7936285479337192,
+          0.47546451087100977
+        ],
+        [
+          0.8118026874650884,
+          0.6747896538912869
+        ],
+        [
+          0.5040299602356267,
+          0.6290925706139772
+        ]
+      ]
+    },
+    {
+      "name": "ACTIVE DRILLING",
+      "level": 3,
+      "restricted": true,
+      "points": [
+        [
+          0.2766034836065574,
+          0.7219424852759398
+        ],
+        [
+          0.5035527663934426,
+          0.6323165854722606
+        ],
+        [
+          0.6665292008196722,
+          0.6554160910346833
+        ],
+        [
+          0.7295184426229508,
+          0.9972096997018832
+        ],
+        [
+          0.26456454918032785,
+          0.9894386679269978
+        ]
+      ]
+    }
+  ],
+  "model": "models/yolo26n.pt",
+  "zone_membership": {
+    "mode": "ground_contact",
+    "ground_margin_fraction": 0.02
+  },
+  "ppe": {
+    "enabled": true,
+    "log_missing": true,
+    "hold_s": 0.5,
+    "min_observations": 3
+  },
+  "zoning_notes": "Manually estimated image-space ground polygons from the assigned video; not metric clearances. Recalibrate for a different clip or camera view. Foot-corner membership does not detect upper-body contact with equipment.",
+  "pipeline": "yolo26-ppe",
+  "auxiliary_detector": {
+    "image_size": 640,
+    "score": 0.35,
+    "threads": 2,
+    "agnostic_nms": false,
+    "label_categories": {
+      "Person": "worker",
+      "machinery": "machine",
+      "vehicle": "machine",
+      "Hardhat": "ppe",
+      "NO-Hardhat": "ppe",
+      "Safety Vest": "ppe",
+      "NO-Safety Vest": "ppe"
+    },
+    "score_by_category": {
+      "worker": 0.5,
+      "machine": 0.35,
+      "ppe": 0.5
+    },
+    "worker_box_filter": {
+      "min_height_fraction": 0.0,
+      "max_width_fraction": 1.0
+    },
+    "model": "models/kaggle-ppe-best.pt",
+    "every_n_frames": 3
+  },
+  "incident_policy": {
+    "mode": "demo_once",
+    "collection_seconds": 24.035
+  },
+  "input_media": {
+    "source": 2,
+    "video": "example_video.mp4",
+    "channel": 1
+  }
+}

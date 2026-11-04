@@ -1,0 +1,28 @@
+{
+  "cameras": ["src1", "src2"],
+  "routes": {
+    "src1": {
+      "source": 1,
+      "channel": 0,
+      "video": ""
+    },
+    "src2": {
+      "source": 2,
+      "channel": 1,
+      "video": ""
+    }
+  },
+  "runtime": {
+    "backend": "neat-device",
+    "ssh_target": "USER@DEVICE_HOST",
+    "python": "/home/USER/pyneat/bin/python",
+    "insight_host": "SDK_HOST",
+    "rtsp_port": 8554,
+    "video_port_base": 29000,
+    "detector_config": "configs/neat-yolo26-ppe.json",
+    "preview_width": 960,
+    "video_transport": "ssh",
+    "video_host": "127.0.0.1",
+    "insight_local_video_port_base": 9000
+  }
+}
