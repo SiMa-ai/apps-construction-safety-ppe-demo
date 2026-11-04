@@ -159,17 +159,7 @@ Use a compiled Neat-compatible archive, not the original Kaggle `.pt` checkpoint
 decoders, class mappings, and PPE sampling interval. Keep those contracts matched
 to the downloaded models.
 
-For releases providing a completed `models/modalix-release.json`, the bundled
-helper downloads both models and checks their hashes:
-
-```bash
-python3 scripts/fetch_modalix_models.py --check-manifest
-python3 scripts/fetch_modalix_models.py
-python3 scripts/fetch_modalix_models.py --verify-only
-```
-
-That manifest is not currently bundled in Git; these helper commands require the
-completed release manifest. Model binaries and runtime outputs are excluded from Git.
+Model binaries and runtime outputs are excluded from Git.
 
 ## 3. Configure cameras and Insight
 
@@ -403,7 +393,7 @@ via the [Kaggle dataset](https://www.kaggle.com/datasets/snehilsanyal/constructi
 and [Roboflow project](https://universe.roboflow.com/roboflow-universe-projects/construction-site-safety).
 The supplied dataset README declares [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 Retain its contributor/source credits and identify modifications when redistributing
-the dataset. That declaration does not by itself establish the checkpoint's license.
+the dataset.
 
 | Component | Upstream terms and notices |
 | --- | --- |
@@ -413,8 +403,3 @@ the dataset. That declaration does not by itself establish the checkpoint's lice
 | OpenCV 4.5+ | [Apache-2.0](https://opencv.org/license/); the [opencv-python packaging license](https://github.com/opencv/opencv-python/blob/4.x/LICENSE.txt) and bundled third-party notices also apply |
 | PyTorch (reference backend) | [Upstream license and third-party notices](https://github.com/pytorch/pytorch/blob/main/LICENSE) |
 | FFmpeg (video I/O / reference encoder) | [Build-dependent LGPL/GPL terms](https://www.ffmpeg.org/legal.html); the reference encoder uses libx264 |
-
-Acknowledgements do not replace license texts or required redistribution notices.
-Confirm the PPE checkpoint's distribution terms before publishing its compiled
-release. This checkout currently has no project `LICENSE` file; maintainers must
-select the application license separately rather than infer it from dependencies.
