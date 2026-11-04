@@ -352,7 +352,11 @@ dialog img { outline: 1px solid #ffffff1a; outline-offset: -1px; }
 .grid { gap: 20px; }
 .grid.single-view { grid-template-columns: 1fr; }
 .camera { border-radius: 16px; background: var(--surface); border-color: var(--border); }
-.camera[data-alert='danger'] { border-color: #a5565e; }
+.camera[data-alert='danger'] {
+  border-color: #ff4d58;
+  outline: 3px solid #ff4d58;
+  outline-offset: -1px;
+}
 .camera-head { min-height: 60px; padding: 10px 16px; }
 .camera-head h2 { font-size: .9375rem; font-weight: 500; }
 .badge { font-size: .6875rem; letter-spacing: .04em; }

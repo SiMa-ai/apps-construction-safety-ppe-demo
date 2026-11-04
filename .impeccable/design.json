@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-07T23:54:27.087943+00:00",
+  "title": "Design System: SiMa Site Watch",
+  "extensions": {
+    "colorMeta": {},
+    "typographyMeta": {},
+    "shadows": [],
+    "motion": [
+      {
+        "name": "button-background",
+        "value": "background 120ms",
+        "purpose": "Button hover feedback; disabled with reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact",
+        "value": "760px"
+      },
+      {
+        "name": "stacked-monitor",
+        "value": "900px"
+      },
+      {
+        "name": "single-camera-column",
+        "value": "1250px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "description": "Primary button extracted from the monitoring interface.",
+      "html": "<button class=\"ds-primary\">Save &amp; apply zones</button>",
+      "css": ".ds-primary{font:600 1rem Inter,system-ui,sans-serif;min-height:40px;padding:8px 12px;border:1px solid var(--accent,#d2ee99);border-radius:5px;background:var(--accent,#d2ee99);color:#182114;transition:background 120ms}.ds-primary:hover{background:#e0f5b9}.ds-primary:focus-visible{outline:2px solid var(--focus,#d7e8df);outline-offset:3px}",
+      "refersTo": "button-primary"
+    },
+    {
+      "name": "Quiet button",
+      "kind": "button",
+      "description": "Quiet button extracted from the monitoring interface.",
+      "html": "<button class=\"ds-quiet\">Discard changes</button>",
+      "css": ".ds-quiet{font:1rem Inter,system-ui,sans-serif;min-height:40px;padding:8px 12px;border:1px solid #505058;border-radius:5px;background:transparent;color:#eceeef;transition:background 120ms}.ds-quiet:hover{background:#38383e}.ds-quiet:focus-visible{outline:2px solid var(--focus,#d7e8df);outline-offset:3px}"
+    },
+    {
+      "name": "Track filter",
+      "kind": "input",
+      "description": "Track filter extracted from the monitoring interface.",
+      "html": "<label class=\"ds-field\">Track ID<input placeholder=\"e.g. W0001\"></label>",
+      "css": ".ds-field{display:flex;flex-direction:column;gap:7px;font:14px Inter,system-ui,sans-serif;color:#eceeef}.ds-field input{font:inherit;min-height:40px;padding:8px 12px;box-sizing:border-box;background:#29292d;color:#eceeef;border:1px solid #505058;border-radius:5px}.ds-field input:focus-visible{outline:2px solid var(--focus,#d7e8df);outline-offset:3px}"
+    },
+    {
+      "name": "Selected navigation",
+      "kind": "nav",
+      "description": "Selected navigation extracted from the monitoring interface.",
+      "html": "<nav aria-label=\"Dashboard navigation\"><button class=\"ds-nav\" aria-current=\"page\">Monitor</button></nav>",
+      "css": ".ds-nav{font:14px Inter,system-ui,sans-serif;min-height:40px;border:0;border-radius:24px;padding:8px 18px;background:var(--accent,#d2ee99);color:#182114}.ds-nav:hover{background:#e0f5b9}.ds-nav:focus-visible{outline:2px solid var(--focus,#d7e8df);outline-offset:3px}",
+      "refersTo": "navigation-selected"
+    },
+    {
+      "name": "Selected camera view",
+      "kind": "chip",
+      "description": "Selected camera view extracted from the monitoring interface.",
+      "html": "<button class=\"ds-view\" aria-pressed=\"true\">All cameras</button>",
+      "css": ".ds-view{font:14px Inter,system-ui,sans-serif;min-height:40px;padding:8px 18px;border:1px solid var(--accent,#d2ee99);border-radius:24px;background:var(--accent,#d2ee99);color:#182114}.ds-view:hover{background:#38383e;color:#eceeef}.ds-view:focus-visible{outline:2px solid var(--focus,#d7e8df);outline-offset:3px}"
+    },
+    {
+      "name": "Camera surface",
+      "kind": "card",
+      "description": "Camera surface extracted from the monitoring interface.",
+      "html": "<section class=\"ds-camera\" aria-label=\"Camera surface\"><div class=\"ds-head\">Camera</div><div class=\"ds-video\">Connecting\u2026</div><details><summary>Diagnostics</summary></details></section>",
+      "css": ".ds-camera{overflow:hidden;border:1px solid var(--border,#343b39);border-radius:16px;background:var(--surface,#1a1e1e);color:#eceeef;font:14px Inter,system-ui,sans-serif}.ds-head{padding:10px 16px;min-height:40px;display:flex;align-items:center}.ds-video{aspect-ratio:16/9;background:#0b0e0d;display:grid;place-items:center;color:var(--muted,#adb8b3)}.ds-camera details{padding:10px 16px;font-size:12px;color:var(--muted,#adb8b3)}.ds-camera summary{cursor:pointer}.ds-camera summary:focus-visible{outline:2px solid var(--focus,#d7e8df);outline-offset:3px}",
+      "refersTo": "camera-card"
+    }
+  ],
+  "narrative": {
+    "northStar": "Camera-first monitoring",
+    "overview": "Dark smart-camera monitoring with rounded charcoal surfaces, lime selection, and restrained interface chrome. Camera imagery carries the main visual weight; a compact alert feed provides adjacent evidence access. This direction follows the user-supplied monitoring references.",
+    "keyCharacteristics": [
+      "Video-first monitoring",
+      "Rounded charcoal surfaces",
+      "Lime selected navigation",
+      "Compact alerts and short labels",
+      "Diagnostics behind disclosures"
+    ],
+    "rules": [],
+    "dos": [
+      "Use actual camera names, statuses, and evidence.",
+      "Keep video prominent and alerts compact.",
+      "Pair warning colors with readable status text.",
+      "Preserve visible keyboard focus and reduced-motion behavior."
+    ],
+    "donts": [
+      "Do not add a pause control or redundant review link to the monitor.",
+      "Do not promote diagnostic values or long explanations into the primary monitoring view.",
+      "Do not imply verified compliance or cross-camera identity.",
+      "Do not invent site names, benchmarks, or brand promises."
+    ]
+  }
+}

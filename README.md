@@ -16,6 +16,29 @@ This is a demonstration of visual safety monitoring. Zones approximate ground
 contact in the image; they do not measure physical clearance. Person IDs apply
 only within a camera session.
 
+## Dashboard screenshots
+
+The dashboard combines annotated camera views with recorded PPE and danger-zone
+findings. These captures use the configured demo videos and actual review records.
+
+![SiMa Site Watch dashboard with two annotated camera views and safety alerts](docs/screenshots/ppe-dashboard.png)
+
+### Alert review
+
+Open a finding to inspect its recorded snapshot, zone, and track details.
+
+![Recorded PPE finding and its evidence snapshot](docs/screenshots/ppe-alert-review.png)
+
+### Performance details
+
+Camera details show measured processing throughput and stage timing statistics.
+These values describe the captured session; they are not end-to-end latency.
+
+![Dashboard camera performance details](docs/screenshots/ppe-performance.png)
+
+The PNG files in [`docs/screenshots`](docs/screenshots/) are available for
+presentations. Overview and alert captures are 3840 × 2160 pixels (16:9).
+
 ## Architecture
 
 The diagram shows the **direct video transport** configuration. Each camera has
@@ -97,7 +120,7 @@ compiled packages. Keep the archives intact: **do not untar them**.
 | Purpose | Provider | File expected under `models/` |
 | --- | --- | --- |
 | People detection | SiMa Model Zoo | `yolo26n-det-bf16-mla_tess-b1.tar.gz` |
-| PPE and machinery detection | Hugging Face release (publication pending) | `ppe-yolov8s-bf16-modalix.tar.gz` |
+| PPE and machinery detection | [Hugging Face](https://huggingface.co/jainarchita/ppe-yolov8s-bf16-modalix) | `ppe-yolov8s-bf16-modalix.tar.gz` |
 
 ### YOLO26n — SiMa Model Zoo
 
@@ -117,18 +140,18 @@ compatible with it; the Model Zoo version alone does not specify your runtime ve
 
 ### YOLOv8s PPE — Hugging Face
 
-**The public PPE repository, pinned revision, and release checksum are not yet
-provided.** Until publication, place your locally validated compiled PPE package
-at `models/ppe-yolov8s-bf16-modalix.tar.gz`.
-
-Once published, replace the placeholders below with the release's organization,
-repository, and full commit hash, then verify against its published SHA-256:
+Download the compiled BF16 Modalix package from
+[jainarchita/ppe-yolov8s-bf16-modalix](https://huggingface.co/jainarchita/ppe-yolov8s-bf16-modalix).
+The URL below is pinned to revision `f36500e2f7ca0b681f52e30e6201ce3d22250f33`.
 
 ```bash
+mkdir -p models
 curl --fail --location \
-  'https://huggingface.co/ORG/REPO/resolve/COMMIT_SHA/ppe-yolov8s-bf16-modalix.tar.gz' \
+  'https://huggingface.co/jainarchita/ppe-yolov8s-bf16-modalix/resolve/f36500e2f7ca0b681f52e30e6201ce3d22250f33/ppe-yolov8s-bf16-modalix.tar.gz' \
   --output models/ppe-yolov8s-bf16-modalix.tar.gz
-sha256sum models/*.tar.gz
+printf '%s  %s\n' \
+  '101e28fdd1a672405539baf0e659e4dea0afd64014a2a0278e79984f370be7cb' \
+  'models/ppe-yolov8s-bf16-modalix.tar.gz' | sha256sum --check -
 ```
 
 Use a compiled Neat-compatible archive, not the original Kaggle `.pt` checkpoint.
@@ -236,9 +259,9 @@ Forward SDK port **8765** to your computer and open **http://localhost:8765**.
    select **Add zone**, click at least three corners, and select **Finish polygon**.
    Set its name/type, mark danger areas as restricted, and **Save & apply zones**.
    Drag existing corners or use **Corner coordinates** for precise edits.
-5. After configuring zones, return to **Video** and select **Apply route and start**
-   again to collect a fresh review using the saved policy. Keeping the same video
-   preserves its zones. An already-playing source continues from its current position.
+5. **Save & apply zones** starts a new review when the running camera applies
+   the layout. Previous findings are archived and the collection window restarts.
+   An already-playing source continues from its current position.
 6. Select an item under **Alerts** to open its evidence pop-up. The heading shows
    **Missing vest**, **Missing hardhat**, or **Danger-zone entry**, followed by the
    camera alias, snapshot, location, track IDs, time, and observation count.
@@ -252,8 +275,8 @@ new camera session; the previous session's evidence remains in `runs/`.
 Choosing a different video requires acknowledging **Clear zones from the previous
 video**; the old layout is backed up before it is cleared. Selecting an occupied
 output channel swaps camera display positions and also restarts the other camera
-if it is running. Saving polygons reloads them during inference, but does not
-extend a completed review window.
+if it is running. Saving changed polygons applies them during inference and starts a new review
+with a fresh collection window.
 
 For already assigned and playing Insight sources, the CLI can control inference:
 

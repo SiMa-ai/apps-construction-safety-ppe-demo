@@ -1,27 +1,153 @@
 {
-  "description": "Camera safety policy. Select a video and draw its zones in the dashboard.",
+  "description": "Digger view: red ground polygon covers excavation and near-wheel working area; orange edge and yellow foreground follow perspective. Left ground walkway retained. Incident display shows danger zones only; other zone geometry retained for location metadata.",
+  "detector": {
+    "image_size": 640,
+    "score": 0.35,
+    "threads": 2,
+    "label_categories": {
+      "person": "worker"
+    },
+    "score_by_category": {
+      "worker": 0.5
+    }
+  },
   "event_hold_s": 0.3,
   "event_release_s": 1.0,
   "tracker": {
     "max_gap_s": 2.0,
-    "min_hits": 2
+    "min_hits": 3,
+    "new_track_score": 0.5
   },
-  "zones": [],
+  "zones": [
+    {
+      "name": "EXCAVATION EDGE/UNEVEN GROUND",
+      "level": 2,
+      "restricted": false,
+      "points": [
+        [
+          0.4191008912699302,
+          0.8397439200907365
+        ],
+        [
+          0.4987853740852323,
+          0.855768247851081
+        ],
+        [
+          1,
+          0.7982591203594159
+        ],
+        [
+          0.9982017774967152,
+          0.9449501644431879
+        ],
+        [
+          0.41210839380828784,
+          0.9435607375674906
+        ]
+      ]
+    },
+    {
+      "name": "LEFT WALKWAY",
+      "level": 0,
+      "restricted": false,
+      "points": [
+        [
+          0.0010234220022210176,
+          0.7637882945723488
+        ],
+        [
+          0.002654150097567651,
+          0.9898317848500372
+        ],
+        [
+          0.4056876547981751,
+          0.996166911654277
+        ],
+        [
+          0.4172564742402145,
+          0.8386126381633617
+        ]
+      ]
+    },
+    {
+      "name": "DIGGER EXCAVATION",
+      "level": 3,
+      "restricted": true,
+      "points": [
+        [
+          0.0005478896103896104,
+          0.33142821140552997
+        ],
+        [
+          0.0022118506493506492,
+          0.7564354118663594
+        ],
+        [
+          0.48730215097402596,
+          0.8526965725806451
+        ],
+        [
+          0.996484375,
+          0.7937698012672811
+        ],
+        [
+          0.9995434253246753,
+          0.516570060483871
+        ]
+      ]
+    }
+  ],
+  "model": "models/yolo26n.pt",
   "zone_membership": {
-    "mode": "either_bottom_corner",
-    "include_boundary": true
+    "mode": "ground_contact",
+    "ground_margin_fraction": 0.02
   },
   "ppe": {
     "enabled": true,
     "log_missing": true,
+    "hold_s": 1.0,
+    "min_observations": 3,
     "high_visibility_vest_guard": {
       "enabled": true,
       "min_coverage": 0.1,
       "min_patch_coverage": 0.05
     }
   },
+  "zoning_notes": "Manually estimated image-space ground polygons from the assigned video; not metric clearances. Recalibrate for a different clip or camera view. Foot-corner membership does not detect upper-body contact with equipment.",
+  "pipeline": "yolo26-ppe",
+  "auxiliary_detector": {
+    "image_size": 640,
+    "score": 0.35,
+    "threads": 2,
+    "agnostic_nms": false,
+    "label_categories": {
+      "Person": "worker",
+      "machinery": "machine",
+      "vehicle": "machine",
+      "Hardhat": "ppe",
+      "NO-Hardhat": "ppe",
+      "Safety Vest": "ppe",
+      "NO-Safety Vest": "ppe"
+    },
+    "score_by_category": {
+      "worker": 0.5,
+      "machine": 0.35,
+      "ppe": 0.5
+    },
+    "worker_box_filter": {
+      "min_height_fraction": 0.0,
+      "max_width_fraction": 1.0
+    },
+    "model": "models/kaggle-ppe-best.pt",
+    "every_n_frames": 3
+  },
   "incident_policy": {
     "mode": "demo_once",
     "collection_seconds": 60
+  },
+  "input_media": {
+    "source": 1,
+    "video": "youtube/youtube_PHezq3zCgGs_1080p30_s30_d60_h264.mp4",
+    "channel": 0
   }
 }

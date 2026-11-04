@@ -129,18 +129,22 @@ class IncidentLog:
         request = json.loads(path.read_text())
         if request["token"] == self.control_token:
             return
+        self.begin_review(now)
+        self.control_token = request["token"]
+        return True
+
+    def begin_review(self, now):
+        """Archive current findings and start collection without erasing audit logs."""
         archive = self.directory / "reviews"
         archive.mkdir(exist_ok=True)
         (archive / f"{self.review_id}.json").write_text(
             json.dumps(list(self.records.values()), indent=2) + "\n"
         )
-        self.control_token = request["token"]
         self.review_id = uuid.uuid4().hex[:12]
         self.review_start_s = now
         self.records = {}
         self.suppressed = 0
         self.publish()
-        return True
 
     def close(self):
         self.stream.close()

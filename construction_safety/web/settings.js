@@ -482,7 +482,7 @@
       }
       status(
         applied
-          ? 'Saved and applied live. Start a new review to collect findings with these zones.'
+          ? 'Saved and applied live. A new review has started with these zones.'
           : 'Saved to configuration. The layout will apply when this camera is running.',
       );
     } catch (error) {

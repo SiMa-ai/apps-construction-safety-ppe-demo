@@ -387,8 +387,9 @@ def main(argv=None):
                     new_zones = validate_zones(json.loads(args.config.read_text()).get("zones", []))
                     new_version = revision(new_zones)
                     if new_version != zone_version:
-                        # Rearm entry gates for new geometry; retain the incident review.
+                        # Apply the new geometry before collecting a fresh review.
                         analytics.zones = load_zones({"zones": new_zones}, width, height)
+                        events.begin_review(now)
                         analytics.begin_review()
                         config["zones"] = new_zones
                         zone_version = new_version
